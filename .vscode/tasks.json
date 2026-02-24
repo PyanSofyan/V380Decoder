@@ -1,0 +1,165 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/V380Decoder.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "publish",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "${workspaceFolder}/V380Decoder.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "watch",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "watch",
+                "run",
+                "${workspaceFolder}/V380Decoder.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "publish: windows-x64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "-c",
+                "Release",
+                "-r",
+                "win-x64",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:EnableCompressionInSingleFile=true",
+                "-p:PublishTrimmed=true",
+                "-o",
+                "-./publish/win-x64"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "detail": "Publish for Windows 64-bit"
+        },
+        {
+            "label": "publish: windows-x86",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "-c",
+                "Release",
+                "-r",
+                "win-x86",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:EnableCompressionInSingleFile=true",
+                "-p:PublishTrimmed=true",
+                "-o",
+                "-./publish/win-x86"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "detail": "Publish for Windows 32-bit"
+        },
+        {
+            "label": "publish: linux-x64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "-c",
+                "Release",
+                "-r",
+                "linux-x64",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:EnableCompressionInSingleFile=true",
+                "-p:PublishTrimmed=true",
+                "-o",
+                "-./publish/linux-x64"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "detail": "Publish for Linux 64-bit"
+        },
+        {
+            "label": "publish: linux-arm",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "-c",
+                "Release",
+                "-r",
+                "linux-arm",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:EnableCompressionInSingleFile=true",
+                "-p:PublishTrimmed=true",
+                "-o",
+                "-./publish/linux-arm"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "detail": "Publish for Linux ARM (Raspberry Pi, etc)"
+        },
+        {
+            "label": "publish: linux-arm64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "-c",
+                "Release",
+                "-r",
+                "linux-arm64",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:EnableCompressionInSingleFile=true",
+                "-p:PublishTrimmed=true",
+                "-o",
+                "-./publish/linux-arm64"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "detail": "Publish for Linux ARM64"
+        },
+        {
+            "label": "publish: all",
+            "dependsOn": [
+                "publish: windows-x64",
+                "publish: windows-x86",
+                "publish: linux-x64",
+                "publish: linux-arm",
+                "publish: linux-arm64"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "Publish all platform"
+        }
+    ]
+}
