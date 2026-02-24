@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    name: Build ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-latest
+            use_trim: true
+            
+          - rid: linux-arm64
+            os: ubuntu-latest
+            use_trim: true
+            
+          - rid: linux-arm
+            os: ubuntu-latest
+            use_trim: true
+          
+          - rid: win-x64
+            os: windows-latest
+            use_trim: true
+            
+          - rid: win-x86
+            os: windows-latest
+            use_trim: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          
+      - name: Restore
+        run: dotnet restore
+        
+      - name: Publish (with trim)
+        if: matrix.use_trim == true
+        run: |
+          dotnet publish -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:PublishTrimmed=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -o ./output/${{ matrix.rid }}
+        shell: bash
+        
+      - name: Publish (without trim - win-x86 only)
+        if: matrix.use_trim == false
+        run: |
+          dotnet publish -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -o ./output/${{ matrix.rid }}
+        shell: bash
+        
+      - name: Package Linux
+        if: startsWith(matrix.rid, 'linux-')
+        run: |
+          cd ./output/${{ matrix.rid }}
+          chmod +x V380Decoder
+          tar -czf ../../V380Decoder-${{ matrix.rid }}.tar.gz *
+          cd ../..
+          sha256sum V380Decoder-${{ matrix.rid }}.tar.gz > V380Decoder-${{ matrix.rid }}.tar.gz.sha256
+          
+      - name: Package Windows
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          cd ./output/${{ matrix.rid }}
+          Compress-Archive -Path * -DestinationPath ../../V380Decoder-${{ matrix.rid }}.zip
+          cd ../..
+          $hash = (Get-FileHash -Algorithm SHA256 V380Decoder-${{ matrix.rid }}.zip).Hash
+          "$hash  V380Decoder-${{ matrix.rid }}.zip" | Out-File -Encoding ASCII V380Decoder-${{ matrix.rid }}.zip.sha256
+          
+      - name: Upload Linux
+        if: startsWith(matrix.rid, 'linux-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: |
+            V380Decoder-${{ matrix.rid }}.tar.gz
+            V380Decoder-${{ matrix.rid }}.tar.gz.sha256
+          
+      - name: Upload Windows
+        if: startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: |
+            V380Decoder-${{ matrix.rid }}.zip
+            V380Decoder-${{ matrix.rid }}.zip.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+        
+      - name: Generate release notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## Installation
+          
+          #### Linux
+          ```bash
+          tar -xzf V380Decoder-linux-x64.tar.gz
+          chmod +x V380Decoder
+          ./V380Decoder --help
+          ```
+          
+          #### Windows
+          Extract the ZIP file and run `V380Decoder.exe`
+          
+          ## Quick Start
+          
+          ```bash
+          # RTSP Server
+          ./V380Decoder --id 12345678 --username admin --password mypass --ip 192.168.1.2
+          
+          # RTSP + ONVIF + Web API
+          ./V380Decoder --id 12345678 --username admin --password mypass --ip 192.168.1.2 --enable-onvif --enable-api
+          ```
+          
+          **Access:**
+          - RTSP: `rtsp://192.168.1.3:8554/live`
+          - Web UI: `http://192.168.1.3:8080`
+          - ONVIF: `http://192.168.1.3:8080/onvif/device_service`
+          - Snapshot: `http://192.168.1.3:8080/snapshot`
+        
+          EOF
+        
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            ./artifacts/linux-x64/*
+            ./artifacts/linux-arm64/*
+            ./artifacts/linux-arm/*
+            ./artifacts/win-x64/*
+            ./artifacts/win-x86/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
