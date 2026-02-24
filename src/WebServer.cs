@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace V380Decoder.src
@@ -31,6 +32,10 @@ namespace V380Decoder.src
             builder.WebHost.UseUrls($"http://*:{httpPort}");
 
             builder.Logging.ClearProviders();
+            builder.Services.ConfigureHttpJsonOptions(options =>
+            {
+                options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
+            });
 
             app = builder.Build();
 
@@ -74,7 +79,7 @@ namespace V380Decoder.src
                 app.MapPost("/api/image/auto", () => { client.ImageAuto(); LogUtils.debug("[API] Image Auto"); Results.Ok(); });
                 app.MapPost("/api/image/flip", () => { client.ImageFlip(); LogUtils.debug("[API] Image Flip"); Results.Ok(); });
 
-                app.MapGet("/api/status", () => Results.Ok(new
+                app.MapGet("/api/status", () => Results.Ok(new StatusResponse
                 {
                     status = "running",
                     timestamp = DateTime.Now

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using H264Sharp;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
@@ -22,10 +23,47 @@ namespace V380Decoder.src
         private bool autoDecodeEnabled = true;
         private DateTime lastAutoDecodeTime = DateTime.MinValue;
         private const int MinAutoDecodeIntervalMs = 2000;
+        private bool useFFmpeg = false;
 
         public SnapshotManager()
         {
-            decoder = new H264Decoder();
+            if (IsFFmpegAvailable())
+            {
+                LogUtils.debug($"[SNAPSHOT] use FFmpeg decoder");
+                useFFmpeg = true;
+            }
+            else
+            {
+                LogUtils.debug($"[SNAPSHOT] use H264Sharp decoder");
+                decoder = new H264Decoder();
+            }
+        }
+
+        private bool IsFFmpegAvailable()
+        {
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "ffmpeg",
+                        Arguments = "-version",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                bool exited = process.WaitForExit(2000);
+                return exited && process.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public void UpdateFrame(byte[] h264Frame, int width, int height)
@@ -44,7 +82,7 @@ namespace V380Decoder.src
                 cachedJpeg = null;
             }
 
-            if (autoDecodeEnabled)
+            if (autoDecodeEnabled && !useFFmpeg)
             {
                 lock (lockObj)
                 {
@@ -156,7 +194,10 @@ namespace V380Decoder.src
 
             if (needDecode)
             {
-                DecodeSnapshot(h264Data);
+                if (useFFmpeg)
+                    DecodeWithFFmpeg(h264Data);
+                else
+                    DecodeSnapshot(h264Data);
             }
 
             lock (lockObj)
@@ -264,6 +305,47 @@ namespace V380Decoder.src
             using var ms = new MemoryStream();
             image.Save(ms, new JpegEncoder { Quality = 80 });
             return ms.ToArray();
+        }
+
+        private void DecodeWithFFmpeg(byte[] h264Data)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = "-hide_banner -loglevel error -f h264 -i pipe:0 -frames:v 1 -q:v 2 -f image2 pipe:1",
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+
+                using var proc = Process.Start(psi);
+                proc.StandardInput.BaseStream.Write(h264Data, 0, h264Data.Length);
+                proc.StandardInput.Close();
+
+                using var ms = new MemoryStream();
+                proc.StandardOutput.BaseStream.CopyTo(ms);
+                proc.WaitForExit(2000);
+                if (ms.Length > 0)
+                {
+                    LogUtils.debug($"[SNAPSHOT] Success: {ms.Length} bytes JPEG");
+                    lock (lockObj)
+                    {
+                        cachedJpeg = ms.ToArray();
+                        lastDecodeTime = DateTime.Now;
+                        isDecoding = false;
+                    }
+                    return;
+                }
+                lock (lockObj) { isDecoding = false; }
+            }
+            catch
+            {
+                Console.Error.Write("[SNAPSHOT] FFmpeg not installed");
+                lock (lockObj) { isDecoding = false; }
+            }
         }
 
         public void Dispose()

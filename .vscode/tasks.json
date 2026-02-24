@@ -54,7 +54,7 @@
                 "-p:EnableCompressionInSingleFile=true",
                 "-p:PublishTrimmed=true",
                 "-o",
-                "-./publish/win-x64"
+                "./publish/win-x64"
             ],
             "group": "build",
             "problemMatcher": "$msCompile",
@@ -76,7 +76,7 @@
                 "-p:EnableCompressionInSingleFile=true",
                 "-p:PublishTrimmed=true",
                 "-o",
-                "-./publish/win-x86"
+                "./publish/win-x86"
             ],
             "group": "build",
             "problemMatcher": "$msCompile",
@@ -98,7 +98,7 @@
                 "-p:EnableCompressionInSingleFile=true",
                 "-p:PublishTrimmed=true",
                 "-o",
-                "-./publish/linux-x64"
+                "./publish/linux-x64"
             ],
             "group": "build",
             "problemMatcher": "$msCompile",
@@ -120,7 +120,7 @@
                 "-p:EnableCompressionInSingleFile=true",
                 "-p:PublishTrimmed=true",
                 "-o",
-                "-./publish/linux-arm"
+                "./publish/linux-arm"
             ],
             "group": "build",
             "problemMatcher": "$msCompile",
@@ -142,7 +142,7 @@
                 "-p:EnableCompressionInSingleFile=true",
                 "-p:PublishTrimmed=true",
                 "-o",
-                "-./publish/linux-arm64"
+                "./publish/linux-arm64"
             ],
             "group": "build",
             "problemMatcher": "$msCompile",
