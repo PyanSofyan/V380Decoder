@@ -472,7 +472,7 @@ namespace V380Decoder.src
       return Envelope($@"
               <trt:GetSnapshotUriResponse>
                 <trt:MediaUri>
-                  <tt:Uri>http://{host}:{httpPort}/live</tt:Uri>
+                  <tt:Uri>http://{host}:{httpPort}/snapshot</tt:Uri>
                   <tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>
                   <tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>
                   <tt:Timeout>PT0S</tt:Timeout>
