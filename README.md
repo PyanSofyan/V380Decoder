@@ -43,8 +43,11 @@ This is a port of [prsyahmi/v380](https://github.com/prsyahmi/v380) with signifi
 | `--rtsp-port` | `8554` | No | RTSP server port |
 | `--http-port` | `8080` | No | Web server port (for ONVIF/API) |
 | `--debug` | `false` | No | Enable debug logging |
+| `--help` | `false` | No | Print help |
 
 ## Usage Examples
+
+Download Latest [Release](https://github.com/PyanSofyan/V380decoder/releases/latest)
 
 ### Video Output (pipe to FFplay)
 ```bash
