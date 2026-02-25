@@ -8,6 +8,17 @@ if (args.Length > 0)
         return;
     }
 
+    if (args.Contains("--discover") || args.Contains("-d"))
+    {
+        using var discovery = new DeviceDiscovery();
+        var devices = discovery.Discover();
+        foreach (var dev in devices)
+        {
+            Console.Error.WriteLine($" ID:  {dev.DevId}\n IP:  {dev.Ip}\n MAC: {dev.Mac}\n");
+        }
+        return;
+    }
+
     int id = ArgParser.GetArg(args, "--id", 0);
     int port = ArgParser.GetArg(args, "--port", 8800);
     string username = ArgParser.GetArg(args, "--username", "admin");
@@ -176,6 +187,7 @@ SERVER OPTIONS:
                          Tested with Onvif Device Manager (ODM)
 
 OTHER OPTIONS:
+  --discover             Find camera devices on the local network
   --debug                Enable debug logging (default: false)
   --help                 Show this help message
 
