@@ -12,7 +12,7 @@ namespace V380Decoder.src
       else if (Contains(action, body, "GetDeviceInformation")) return RespGetDeviceInformation(camera);
       else if (Contains(action, body, "GetServices")) return RespGetServices(ctx);
       else if (Contains(action, body, "GetScopes")) return RespGetScopes();
-      else if (Contains(action, body, "GetNetworkInterfaces")) return RespGetNetworkInterfaces();
+      else if (Contains(action, body, "GetNetworkInterfaces")) return RespGetNetworkInterfaces(camera);
       else if (Contains(action, body, "GetDNS")) return RespGetDNS();
       else if (Contains(action, body, "GetNTP")) return RespGetNTP();
       else if (Contains(action, body, "GetHostname")) return RespGetHostname();
@@ -31,7 +31,7 @@ namespace V380Decoder.src
       else if (Contains(action, body, "GetAudioEncoderConfigurationOptions")) return RespGetAudioEncoderConfigOptions();
       else if (Contains(action, body, "GetAudioEncoderConfigurations")) return RespGetAudioEncoderConfigurations();
       else if (Contains(action, body, "GetAudioEncoderConfiguration")) return RespGetAudioEncoderConfig();
-      else if (Contains(action, body, "GetServiceCapabilities")) return RespServiceCapabilities();
+      else if (Contains(action, body, "GetServiceCapabilities")) return RespServiceCapabilities(ctx);
       else if (Contains(action, body, "GetPresets")) return RespGetPresets();
       else if (Contains(action, body, "GetNodes")) return RespGetNodes();
       else if (Contains(action, body, "GetConfigurationOptions")) return RespGetConfigOptions();
@@ -262,58 +262,22 @@ namespace V380Decoder.src
                     <tt:SourceToken>VideoSource_1</tt:SourceToken>
                     <tt:Bounds x=""0"" y=""0"" width=""1280"" height=""720""/>
                   </tt:VideoSourceConfiguration>
-                  <tt:VideoEncoderConfiguration token=""VideoEnc_1"">
-                    <tt:Name>H264</tt:Name>
+                   <tt:VideoEncoderConfiguration token=""VideoEnc_1"">
+                    <tt:Name>Encoder</tt:Name>
                     <tt:UseCount>1</tt:UseCount>
                     <tt:Encoding>H264</tt:Encoding>
-                    <tt:Resolution><tt:Width>1280</tt:Width><tt:Height>720</tt:Height></tt:Resolution>
-                    <tt:RateControl>
-                      <tt:FrameRateLimit>25</tt:FrameRateLimit>
-                      <tt:EncodingInterval>1</tt:EncodingInterval>
-                      <tt:BitrateLimit>4096</tt:BitrateLimit>
-                    </tt:RateControl>
-                    <tt:H264>
-                      <tt:GovLength>30</tt:GovLength>
-                      <tt:H264Profile>High</tt:H264Profile>
-                    </tt:H264>
-                    <tt:Multicast>
-                      <tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address>
-                      <tt:Port>0</tt:Port><tt:TTL>0</tt:TTL><tt:AutoStart>false</tt:AutoStart>
-                    </tt:Multicast>
-                    <tt:SessionTimeout>PT60S</tt:SessionTimeout>
+                    <tt:Resolution>
+                      <tt:Width>1280</tt:Width>
+                      <tt:Height>720</tt:Height>
+                    </tt:Resolution>
                   </tt:VideoEncoderConfiguration>
-                  <tt:AudioSourceConfiguration token=""AudioSrcCfg_1"">
-                    <tt:Name>AudioSource</tt:Name>
-                    <tt:UseCount>1</tt:UseCount>
-                    <tt:SourceToken>AudioSource_1</tt:SourceToken>
-                  </tt:AudioSourceConfiguration>
-                  <tt:AudioEncoderConfiguration token=""AudioEnc_1"">
-                    <tt:Name>PCMA</tt:Name>
-                    <tt:UseCount>1</tt:UseCount>
-                    <tt:Encoding>G711</tt:Encoding>
-                    <tt:Bitrate>64</tt:Bitrate>
-                    <tt:SampleRate>8</tt:SampleRate>
-                    <tt:Multicast>
-                      <tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address>
-                      <tt:Port>0</tt:Port><tt:TTL>0</tt:TTL><tt:AutoStart>false</tt:AutoStart>
-                    </tt:Multicast>
-                    <tt:SessionTimeout>PT60S</tt:SessionTimeout>
-                  </tt:AudioEncoderConfiguration>
                   <tt:PTZConfiguration token=""PTZConfig_1"">
                     <tt:Name>PTZ</tt:Name>
                     <tt:UseCount>1</tt:UseCount>
                     <tt:NodeToken>PTZNode_1</tt:NodeToken>
-                    <tt:DefaultContinuousPanTiltVelocitySpace>
-                      http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace
-                    </tt:DefaultContinuousPanTiltVelocitySpace>
-                    <tt:DefaultPTZTimeout>PT1S</tt:DefaultPTZTimeout>
-                    <tt:PanTiltLimits>
-                      <tt:Range>
-                        <tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:URI>
-                        <tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>
-                        <tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange>
-                      </tt:Range>
-                    </tt:PanTiltLimits>
+                    <tt:DefaultContinuousPanTiltVelocitySpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:DefaultContinuousPanTiltVelocitySpace>
+                    <tt:DefaultRelativePanTiltTranslationSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace</tt:DefaultRelativePanTiltTranslationSpace>
+                    <tt:DefaultAbsolutePantTiltPositionSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:DefaultAbsolutePantTiltPositionSpace>
                   </tt:PTZConfiguration>
                 </trt:Profiles>
               </trt:GetProfilesResponse>");
@@ -385,7 +349,40 @@ namespace V380Decoder.src
                 </trt:Profile>
               </trt:GetProfileResponse>");
 
-    private static string RespServiceCapabilities() => Envelope(@"
+    private static string RespServiceCapabilities(HttpContext ctx)
+    {
+      string path = ctx.Request.Path.Value ?? "";
+
+      if (path.Contains("ptz"))
+        return RespPtzServiceCapabilities();
+      else if (path.Contains("media"))
+        return RespMediaServiceCapabilities();
+      else
+        return RespDeviceServiceCapabilities(); // default: device
+    }
+
+    private static string RespDeviceServiceCapabilities() => Envelope(@"
+              <tds:GetServiceCapabilitiesResponse>
+                <tds:Capabilities>
+                  <tds:Network IPFilter=""false"" ZeroConfiguration=""false"" 
+                    IPVersion6=""false"" DynDNS=""false"" 
+                    HostnameFromDHCP=""false"" NTP=""0""/>
+                  <tds:Security TLS1.0=""false"" TLS1.1=""false"" TLS1.2=""false""
+                    OnboardKeyGeneration=""false"" AccessPolicyConfig=""false""
+                    UsernameToken=""true"" HttpDigest=""false""/>
+                  <tds:System DiscoveryResolve=""false"" DiscoveryBye=""false""
+                    RemoteDiscovery=""false"" SystemBackup=""false""
+                    SystemLogging=""false"" FirmwareUpgrade=""false""/>
+                </tds:Capabilities>
+              </tds:GetServiceCapabilitiesResponse>");
+
+    private static string RespMediaServiceCapabilities() => Envelope(@"
+              <trt:GetServiceCapabilitiesResponse>
+                <trt:Capabilities SnapshotUri=""true"" Rotation=""false""
+                  VideoSourceMode=""false"" OSD=""false""/>
+              </trt:GetServiceCapabilitiesResponse>");
+
+    private static string RespPtzServiceCapabilities() => Envelope(@"
               <tptz:GetServiceCapabilitiesResponse>
                 <tptz:Capabilities EFlip=""false"" Reverse=""false""
                   GetCompatibleConfigurations=""false"" MoveStatus=""false""/>
@@ -506,13 +503,13 @@ namespace V380Decoder.src
                 </trt:AudioSourceConfiguration>
               </trt:GetAudioSourceConfigurationResponse>");
 
-    private static string RespGetNetworkInterfaces() => Envelope(@"
+    private static string RespGetNetworkInterfaces(V380Client camera) => Envelope($@"
               <tds:GetNetworkInterfacesResponse>
                 <tds:NetworkInterfaces token=""eth0"">
                   <tt:Enabled>true</tt:Enabled>
                   <tt:Info>
                     <tt:Name>eth0</tt:Name>
-                    <tt:HwAddress>00:00:00:00:00:00</tt:HwAddress>
+                    <tt:HwAddress>{camera.GetMacAddress()}</tt:HwAddress>
                     <tt:MTU>1500</tt:MTU>
                   </tt:Info>
                   <tt:IPv4>

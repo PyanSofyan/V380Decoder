@@ -21,6 +21,7 @@ namespace V380Decoder.src
         private int frameheight = 720;
         private byte[] aesKey = new byte[16];
         private bool needReconnect = false;
+        private string macAddress;
 
         public V380Client(string ip, int port, uint deviceId, string username, string password, SourceStream source, OutputMode mode)
         {
@@ -31,6 +32,7 @@ namespace V380Decoder.src
             this.password = password;
             this.source = source;
             this.mode = mode;
+            SetMacAddress();
             if (mode == OutputMode.Rtsp)
                 snapshotManager = new SnapshotManager();
         }
@@ -657,6 +659,27 @@ namespace V380Decoder.src
         public string GetDeviceVersion()
         {
             return deviceVersion.ToString();
+        }
+
+        public string GetMacAddress()
+        {
+            return macAddress;
+        }
+
+        public void SetMacAddress()
+        {
+            string mac = "00:00:00:00:00:00";
+            using var discovery = new DeviceDiscovery();
+            var devices = discovery.Discover();
+            foreach (var dev in devices)
+            {
+                if (dev.DevId == deviceId.ToString())
+                {
+                    mac = dev.Mac;
+                    break;
+                }
+            }
+            macAddress = mac;
         }
 
         public void Dispose()
