@@ -51,6 +51,9 @@ namespace V380Decoder.src
       else if (Contains(action, body, "GetOptions")) return RespGetImagingOptions();
       else if (Contains(action, body, "GetStreamUri")) return RespGetStreamUri(ctx, rtspPort);
       else if (Contains(action, body, "GetSnapshotUri")) return RespGetSnapshotUri(ctx, httpPort);
+      else if (Contains(action, body, "GetNetworkProtocols")) return RespGetGetNetworkProtocols(httpPort, rtspPort);
+      else if (Contains(action, body, "GetNetworkDefaultGateway")) return RespGetNetworkDefaultGateway(camera);
+      else if (Contains(action, body, "GetDiscoveryMode")) return RespGetDiscoveryMode();
       else
       {
         LogUtils.debug($"[ONVIF] !! Unhandled: {action}");
@@ -503,23 +506,31 @@ namespace V380Decoder.src
                 </trt:AudioSourceConfiguration>
               </trt:GetAudioSourceConfigurationResponse>");
 
-    private static string RespGetNetworkInterfaces(V380Client camera) => Envelope($@"
+    private static string RespGetNetworkInterfaces(V380Client camera)
+    {
+      DeviceInfo info = camera.GetDeviceInfo();
+      return Envelope($@"
               <tds:GetNetworkInterfacesResponse>
                 <tds:NetworkInterfaces token=""eth0"">
                   <tt:Enabled>true</tt:Enabled>
                   <tt:Info>
                     <tt:Name>eth0</tt:Name>
-                    <tt:HwAddress>{camera.GetMacAddress()}</tt:HwAddress>
+                    <tt:HwAddress>{info.Mac}</tt:HwAddress>
                     <tt:MTU>1500</tt:MTU>
                   </tt:Info>
                   <tt:IPv4>
                     <tt:Enabled>true</tt:Enabled>
                     <tt:Config>
-                      <tt:DHCP>true</tt:DHCP>
+                      <tt:Manual>
+                        <tt:Address>{info.Ip}</tt:Address>
+                        <tt:PrefixLength>{NetworkHelper.SubnetToPrefixLength(info.Subnet)}</tt:PrefixLength>
+                      </tt:Manual>
+                      <tt:DHCP>false</tt:DHCP>
                     </tt:Config>
                   </tt:IPv4>
                 </tds:NetworkInterfaces>
               </tds:GetNetworkInterfacesResponse>");
+    }
 
     private static string RespGetDNS() => Envelope(@"
               <tds:GetDNSResponse>
@@ -710,7 +721,31 @@ namespace V380Decoder.src
                   </tt:Options>
                 </trt:Options>
               </trt:GetAudioEncoderConfigurationOptionsResponse>");
+    private static string RespGetGetNetworkProtocols(int httpPort, int rtspPort) => Envelope($@"
+            <tds:GetNetworkProtocolsResponse>
+              <tds:NetworkProtocols>
+                <tt:Name>HTTP</tt:Name>
+                <tt:Enabled>true</tt:Enabled>
+                <tt:Port>{httpPort}</tt:Port>
+              </tds:NetworkProtocols>
+              <tds:NetworkProtocols>
+                <tt:Name>RTSP</tt:Name>
+                <tt:Enabled>true</tt:Enabled>
+                <tt:Port>{rtspPort}</tt:Port>
+              </tds:NetworkProtocols>
 
+            </tds:GetNetworkProtocolsResponse>");
+    private static string RespGetNetworkDefaultGateway(V380Client camera) => Envelope($@"
+            <tds:GetNetworkDefaultGatewayResponse>
+              <tds:NetworkGateway>
+              <tt:IPv4Address>{camera.GetDeviceInfo().Gateway}</tt:IPv4Address>
+              </tds:NetworkGateway>
+            </tds:GetNetworkDefaultGatewayResponse>");
+
+    private static string RespGetDiscoveryMode() => Envelope($@"
+            <tds:GetDiscoveryModeResponse>
+              <tds:DiscoveryMode>Discoverable</tds:DiscoveryMode>
+            </tds:GetDiscoveryModeResponse>");
     private static string SoapOk(string action)
     {
       string ns = (action.Contains("Move") || action.Contains("Stop") || action.Contains("Home") || action.Contains("Preset")) ? "tptz" : "trt";

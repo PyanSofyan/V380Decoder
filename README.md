@@ -91,7 +91,7 @@ Streaming via relay server (relay IP automatically detected):
 
 ## ONVIF Support (Experimental)
 
-**Status:** Experimental - only tested with [Onvif Device Manager](https://sourceforge.net/projects/onvifdm/) (ODM)
+**Status:** Experimental - tested with [Onvif Device Manager](https://sourceforge.net/projects/onvifdm/) (ODM) and [Onvif Integration](https://www.home-assistant.io/integrations/onvif/) Home Assistant
 
 **Enable ONVIF:**
 ```bash
@@ -108,7 +108,7 @@ http://192.168.1.3:8080/onvif/device_service
 - ✅ PTZ control (pan/tilt)
 - ✅ Imaging settings (light control)
 - ✅ Media profiles
-- ⚠️ Device discovery not implemented, so need add manually
+- ✅ Device discovery
 
 ## Web UI & REST API
 

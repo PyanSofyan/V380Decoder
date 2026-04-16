@@ -8,58 +8,68 @@ using System.Threading.Tasks;
 
 namespace V380Decoder.src
 {
-    public struct TDevice
+    public class DeviceInfo
     {
         public string Mac { get; set; }
         public string DevId { get; set; }
         public string Ip { get; set; }
+        public string Subnet { get; set; }
+        public string Gateway { get; set; }
+
     }
-    public class DeviceDiscovery : IDisposable
+    public class DeviceDiscovery
     {
-        private UdpClient _udpClient;
-        private List<TDevice> _devices = [];
+        private List<DeviceInfo> _devices = [];
 
-        public DeviceDiscovery()
+        public List<DeviceInfo> Discover()
         {
-            _udpClient = new UdpClient(new IPEndPoint(IPAddress.Any, 10009))
+            UdpClient udpClient = new();
+            udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, 10009));
+            udpClient.EnableBroadcast = true;
+            udpClient.Client.ReceiveTimeout = 250;
+            try
             {
-                EnableBroadcast = true
-            };
-            _udpClient.Client.ReceiveTimeout = 250;
-        }
-        public List<TDevice> Discover()
-        {
-            IPEndPoint broadcastEndpoint = new(IPAddress.Broadcast, 10008);
-            byte[] searchCmd = Encoding.ASCII.GetBytes("NVDEVSEARCH^100");
-            int retry = 5;
+                IPEndPoint broadcastEndpoint = new(IPAddress.Broadcast, 10008);
+                byte[] searchCmd = Encoding.ASCII.GetBytes("NVDEVSEARCH^100");
+                int retry = 5;
 
-            while (retry-- > 0)
-            {
-                _udpClient.Send(searchCmd, searchCmd.Length, broadcastEndpoint);
-
-                var startTick = Environment.TickCount;
-                while (Environment.TickCount - startTick < 250)
+                while (retry-- > 0)
                 {
-                    try
+                    udpClient.Send(searchCmd, searchCmd.Length, broadcastEndpoint);
+
+                    var startTick = Environment.TickCount;
+                    while (Environment.TickCount - startTick < 250)
                     {
-                        IPEndPoint remoteEP = null;
-                        byte[] receivedData = _udpClient.Receive(ref remoteEP);
-                        string data = Encoding.ASCII.GetString(receivedData);
-                        Parse(data, remoteEP.Address.ToString());
-                    }
-                    catch (SocketException ex)
-                    {
-                        if (ex.SocketErrorCode == SocketError.TimedOut)
+                        try
+                        {
+                            IPEndPoint remoteEP = null;
+                            byte[] receivedData = udpClient.Receive(ref remoteEP);
+                            string data = Encoding.ASCII.GetString(receivedData);
+                            Parse(data, remoteEP.Address.ToString());
+                        }
+                        catch (SocketException ex)
+                        {
+                            if (ex.SocketErrorCode == SocketError.TimedOut)
+                                break;
+                            Console.Error.WriteLine($"[DISCOVERY] Error receive data: {ex.Message}");
+                        }
+                        catch (TimeoutException)
+                        {
                             break;
-                        Console.Error.WriteLine($"[DISCOVERY] Error receive data: {ex.Message}");
-                    }
-                    catch (TimeoutException)
-                    {
-                        break;
+                        }
                     }
                 }
             }
-
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[DISCOVERY] Error: {ex.Message}");
+            }
+            finally
+            {
+                udpClient.Close();
+                udpClient.Dispose();
+            }
             return _devices;
         }
 
@@ -77,18 +87,14 @@ namespace V380Decoder.src
                     return;
             }
 
-            _devices.Add(new TDevice
+            _devices.Add(new DeviceInfo
             {
                 Mac = mac,
                 DevId = parts[12],
-                Ip = parts[3]
+                Ip = parts[3],
+                Subnet = parts[4],
+                Gateway = parts[5]
             });
-        }
-
-        public void Dispose()
-        {
-            _udpClient?.Close();
-            _udpClient = null;
         }
     }
 }

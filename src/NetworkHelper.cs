@@ -103,5 +103,24 @@ namespace V380Decoder.src
                 description.Contains(keyword, StringComparison.OrdinalIgnoreCase));
         }
 
+        public static int SubnetToPrefixLength(string subnetMask)
+        {
+            var bytes = subnetMask.Split('.').Select(byte.Parse);
+
+            int count = 0;
+
+            foreach (var b in bytes)
+            {
+                int val = b;
+                while (val > 0)
+                {
+                    count += (val & 1);
+                    val >>= 1;
+                }
+            }
+
+            return count;
+        }
+
     }
 }

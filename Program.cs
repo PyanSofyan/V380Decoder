@@ -10,7 +10,7 @@ if (args.Length > 0)
 
     if (args.Contains("--discover") || args.Contains("-d"))
     {
-        using var discovery = new DeviceDiscovery();
+        var discovery = new DeviceDiscovery();
         var devices = discovery.Discover();
         foreach (var dev in devices)
         {
@@ -99,6 +99,13 @@ if (args.Length > 0)
         webServer.Start();
     }
 
+    OnvifDiscovery onvifDiscovery = null;
+    if (enableOnvif)
+    {
+        onvifDiscovery = new OnvifDiscovery(httpPort);
+        onvifDiscovery.Start();
+    }
+
     var cts = new CancellationTokenSource();
 
     Console.CancelKeyPress += (sender, e) =>
@@ -127,6 +134,7 @@ if (args.Length > 0)
         rtsp?.Dispose();
         webServer?.Stop();
         client.Dispose();
+        onvifDiscovery?.Dispose();
     }
 
     Console.Error.WriteLine("[V380] Stopped");
