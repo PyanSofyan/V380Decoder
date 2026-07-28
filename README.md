@@ -9,10 +9,14 @@ This is a port of [prsyahmi/v380](https://github.com/prsyahmi/v380) with signifi
 - ✅ Web UI and REST API for camera control
 - ✅ Snapshot API
 - ✅ Cloud relay streaming support
+- ✅ H.265/HEVC streams (`0x28` keyframes and `0x29` inter frames)
+- ✅ Automatic media decryption layout detection for protocol versions 20/21
 
 ## Tested Cameras
 
-**Note:** I've only tested with 2 V380 cameras running device version 31 with H264 stream.
+H.264 device-version-31 cameras and encrypted H.265 device-version-32
+cloud streams are supported. V380 is a protocol family rather than one fixed
+camera format, so logs from additional models are welcome.
 
 **Camera 1:**
 - Software: `AppEV2W_VA3_V2.5.9.5_20231211`
@@ -25,7 +29,7 @@ This is a port of [prsyahmi/v380](https://github.com/prsyahmi/v380) with signifi
 ## Requirements
 
 - .NET 10 SDK (for building from source)
-- FFmpeg (optional, for snapshot or piping video/audio output)
+- FFmpeg (required for H.265 snapshots/MJPEG; optional for H.264-only use)
 
 ## Command Line Arguments
 
@@ -58,7 +62,11 @@ Download Latest [Release](https://github.com/PyanSofyan/V380decoder/releases/lat
 ```
 ### Video Output (pipe to FFplay)
 ```bash
+# H.264 camera
 ./V380Decoder --id 12345678 --username admin --password password --ip 192.168.1.2 --output video | ffplay -f h264 -i pipe:0
+
+# H.265 camera
+./V380Decoder --id 12345678 --username admin --password password --source cloud --output video | ffplay -f hevc -i pipe:0
 ```
 
 ### Audio Output (pipe to FFplay)
@@ -90,6 +98,18 @@ Streaming via relay server (relay IP automatically detected):
 ```bash
 ./V380Decoder --id 12345678 --username admin --password password --source cloud
 ```
+
+For newer encrypted cameras, startup logs should report the detected codec and
+decryption layout, for example:
+
+```text
+[VIDEO] codec=H265 decrypt=FullBlocks header=16
+[RTSP] video codec=H265
+```
+
+If the media protocol version is absent from a relay response, the decoder
+validates Annex-B NAL units and automatically chooses between the version-20
+selective `64/80` AES layout and version-21 full-block AES.
 
 ## ONVIF Support
 
@@ -242,6 +262,9 @@ Build and run:
 docker build -t v380decoder .
 docker run -d --restart unless-stopped --network host v380decoder --id 12345678 --username admin --password password --ip 192.168.1.2 --enable-onvif --enable-api
 ```
+
+The Docker image includes FFmpeg, so H.265 snapshots and MJPEG work without an
+additional package installation.
 
 ## Acknowledgements
 

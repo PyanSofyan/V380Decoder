@@ -23,6 +23,8 @@ namespace V380Decoder.src
         private byte[] aesKey = new byte[16];
         private bool needReconnect = false;
         private DeviceInfo deviceInfo;
+        private readonly VideoPayloadDecoder videoPayloadDecoder;
+        private bool reportedExtendedAudio;
 
 
         public V380Client(string ip, int port, uint deviceId, string username, string password, SourceStream source, OutputMode mode, bool enableMjpeg)
@@ -35,6 +37,7 @@ namespace V380Decoder.src
             this.source = source;
             this.mode = mode;
             this.enableMjpeg = enableMjpeg;
+            videoPayloadDecoder = new VideoPayloadDecoder(aesKey);
             snapshotManager = new SnapshotManager();
             snapshotManager.SetMjpegActive(enableMjpeg);
         }
@@ -143,7 +146,7 @@ namespace V380Decoder.src
                     return 0;
                 }
                 uint loginResult = ReadUInt32LE(resp, 4);
-                if (loginResult != 1001)
+                if (loginResult is not (1001 or 1002))
                 {
                     if (loginResult == 1011)
                         Console.Error.WriteLine($"[AUTH] invalid username. exiting...");
@@ -152,7 +155,7 @@ namespace V380Decoder.src
                     else if (loginResult == 1018)
                         Console.Error.WriteLine($"[AUTH] invalid device id. exiting...");
                     else
-                        Console.Error.WriteLine($"[AUTH] login failed result: {loginResult} (expected 1001). exiting...");
+                        Console.Error.WriteLine($"[AUTH] login failed result: {loginResult} (expected 1001 or 1002). exiting...");
 
                     return -1;
                 }
@@ -204,6 +207,7 @@ namespace V380Decoder.src
 
         public bool StreamLogin()
         {
+            communicationVersion = 0;
             streamClient = new TcpClient
             {
                 NoDelay = true,
@@ -273,30 +277,47 @@ namespace V380Decoder.src
 
             LogUtils.debug($"[STREAM] login response success");
             LogUtils.debug($"[STREAM] login cmd: {respCmd}");
-            if (source == SourceStream.Lan)
+
+            // The relay returns the same media protocol version field as a LAN
+            // camera. This used to be parsed only for LAN, leaving cloud streams
+            // at version 0 and selecting the wrong AES layout for version 21.
+            if (resp401.Length >= 10)
             {
                 ushort version = ReadUInt16LE(resp401, 8);
-                uint width = ReadUInt32LE(resp401, 10);
-                uint height = ReadUInt32LE(resp401, 14);
-                uint maxPackSize = ReadUInt32LE(resp401, 18);
-                byte audioFreq = resp401[22];
-                byte audioBits = resp401[23];
-                byte audioChannels = resp401[24];
-                communicationVersion = version;
-                frameWidth = (int)width;
-                frameheight = (int)height;
                 LogUtils.debug($"[STREAM] login result: {result}");
                 LogUtils.debug($"[STREAM] login version: {version}");
-                LogUtils.debug($"[STREAM] login width: {width}");
-                LogUtils.debug($"[STREAM] login height: {height}");
-                LogUtils.debug($"[STREAM] login maxPackSize: {maxPackSize}");
-                LogUtils.debug($"[STREAM] login audioFreq: {audioFreq}");
-                LogUtils.debug($"[STREAM] login audioBits: {audioBits}");
-                LogUtils.debug($"[STREAM] login audioChannels: {audioChannels}");
+
+                if (version is 20 or 21)
+                    communicationVersion = version;
+
+                if (resp401.Length >= 25)
+                {
+                    uint width = ReadUInt32LE(resp401, 10);
+                    uint height = ReadUInt32LE(resp401, 14);
+                    uint maxPackSize = ReadUInt32LE(resp401, 18);
+                    byte audioFreq = resp401[22];
+                    byte audioBits = resp401[23];
+                    byte audioChannels = resp401[24];
+
+                    if (width is >= 160 and <= 16384 && height is >= 120 and <= 16384)
+                    {
+                        frameWidth = (int)width;
+                        frameheight = (int)height;
+                    }
+
+                    LogUtils.debug($"[STREAM] login width: {width}");
+                    LogUtils.debug($"[STREAM] login height: {height}");
+                    LogUtils.debug($"[STREAM] login maxPackSize: {maxPackSize}");
+                    LogUtils.debug($"[STREAM] login audioFreq: {audioFreq}");
+                    LogUtils.debug($"[STREAM] login audioBits: {audioBits}");
+                    LogUtils.debug($"[STREAM] login audioChannels: {audioChannels}");
+                }
             }
 
+            videoPayloadDecoder.Reset(communicationVersion);
+
             if (deviceVersion > 30) GenerateMediaKey(authTicket);
-            Console.Error.WriteLine($"[STREAM] login OK");
+            Console.Error.WriteLine($"[STREAM] login OK communicationVersion={communicationVersion}");
             return true;
         }
 
@@ -312,10 +333,8 @@ namespace V380Decoder.src
         public void ReceiveFrames(OutputMode mode, RtspServer rtsp, CancellationToken ct)
         {
             bool needDecrypt = deviceVersion > 30;
-
-            var videoFrags = new List<byte>();
-            var audioFrags = new List<byte>();
-            ushort videoTotal = 0, audioTotal = 0;
+            var videoAssembler = new FragmentAssembler("VIDEO");
+            var audioAssembler = new FragmentAssembler("AUDIO");
 
             var header12 = new byte[12];
             var payloadBuf = new byte[65536];
@@ -362,128 +381,32 @@ namespace V380Decoder.src
                     if (payloadBuf.Length < payLen) payloadBuf = new byte[payLen];
                     if (ReadExact(streamStream, payloadBuf, 0, payLen) < payLen) continue;
 
-                    // VIDEO  0x00=I-frame  0x01=P-frame
-                    if (type == 0x00 || type == 0x01)
-                    {
-                        if (curFrame == 0) { videoFrags.Clear(); videoTotal = totalFrame; }
-                        if (totalFrame != videoTotal) { videoFrags.Clear(); videoTotal = totalFrame; }
-
-                        for (int i = 0; i < payLen; i++) videoFrags.Add(payloadBuf[i]);
-
-                        if (curFrame != totalFrame - 1) continue;
-                        if (videoFrags.Count < 16) { videoFrags.Clear(); continue; }
-
-                        byte[] full = videoFrags.ToArray();
-                        videoFrags.Clear();
-
-                        //parse inner 16-byte frame header
-                        uint frameId = ReadUInt32LE(full, 0);
-                        ushort frameType = ReadUInt16LE(full, 4);
-                        ushort frameRate = ReadUInt16LE(full, 6);
-                        ulong timestamp = ReadUInt64LE(full, 8);
-
-                        byte[] payload = new byte[full.Length - 16];
-                        Array.Copy(full, 16, payload, 0, payload.Length);
-
-                        if (needDecrypt)
-                        {
-                            if (communicationVersion == 21)
-                                DecryptMediaPre2k(payload, payload.Length, 1);
-                            else
-                                DecryptVideoFrame(payload, payload.Length);
-                        }
-
-                        // validate H.264 start code
-                        if (payload.Length < 4 ||
-                            payload[0] != 0 || payload[1] != 0 ||
-                            payload[2] != 0 || payload[3] != 1)
-                        {
-                            Console.Error.WriteLine($"[VIDEO] bad start code, len={payload.Length}");
-                            continue;
-                        }
-
-                        snapshotManager.UpdateFrame(payload, frameWidth, frameheight, isIFrame: type == 0x00);
-
-                        var fd = new FrameData
-                        {
-                            RawType = type,
-                            FrameId = frameId,
-                            FrameType = frameType,
-                            FrameRate = frameRate,
-                            Timestamp = timestamp,
-                            Payload = payload
-                        };
-
-                        if (mode == OutputMode.Video)
-                        {
-                            stdout.Write(payload, 0, payload.Length);
-                            stdout.Flush();
-                        }
-                        else if (mode == OutputMode.Rtsp)
-                        {
-                            rtsp?.PushVideo(fd);
-                        }
-                    }
-
-                    // AUDIO  0x1A
-                    else if (type == 0x1A)
-                    {
-                        if (curFrame == 0) { audioFrags.Clear(); audioTotal = totalFrame; }
-                        if (totalFrame != audioTotal) { audioFrags.Clear(); audioTotal = totalFrame; }
-
-                        for (int i = 0; i < payLen; i++) audioFrags.Add(payloadBuf[i]);
-
-                        if (curFrame != totalFrame - 1) continue;
-                        if (audioFrags.Count < 16) { audioFrags.Clear(); continue; }
-
-                        byte[] full = audioFrags.ToArray();
-                        audioFrags.Clear();
-
-                        //parse inner 16-byte frame header
-                        uint frameId = ReadUInt32LE(full, 0);
-                        ushort frameType = ReadUInt16LE(full, 4);
-                        ushort frameRate = ReadUInt16LE(full, 6);
-                        ulong timestamp = ReadUInt64LE(full, 8);
-
-                        byte[] payload = new byte[full.Length - 16];
-                        Array.Copy(full, 16, payload, 0, payload.Length);
-
-                        if (needDecrypt)
-                        {
-                            if (communicationVersion == 21)
-                                DecryptMediaPre2k(payload, payload.Length, 1);
-                            else
-                                DecryptAudioFrame(payload, payload.Length);
-                        }
-
-                        var fd = new FrameData
-                        {
-                            RawType = type,
-                            FrameId = frameId,
-                            FrameType = frameType,
-                            FrameRate = frameRate,
-                            Timestamp = timestamp,
-                            Payload = payload
-                        };
-
-                        if (mode == OutputMode.Audio)
-                        {
-                            stdout.Write(payload, 0, payload.Length);
-                            stdout.Flush();
-                        }
-                        else if (mode == OutputMode.Rtsp)
-                        {
-                            rtsp?.PushAudio(fd);
-                        }
-                    }
-                    else if (type == 0x5B)
+                    if (type == 0x5B)
                     {
                         continue;
                     }
-                    else
+
+                    // Legacy cameras use 0x00/0x01 for H.264. Newer HEVC
+                    // cameras use 0x28/0x29 for key/inter frames.
+                    if (type is 0x00 or 0x01 or 0x28 or 0x29)
                     {
-                        Console.Error.WriteLine($"[FRAME] unknown type=0x{type:X2} len={payLen}");
+                        if (videoAssembler.TryAppend(
+                                type, totalFrame, curFrame, payloadBuf, payLen, out byte[] full))
+                            HandleVideoFrame(type, full, needDecrypt, mode, rtsp, stdout);
+                        continue;
                     }
+
+                    // 0x1A is the legacy PCMA stream. Type 0x16 has a
+                    // four-byte-longer inner header and is used by newer models.
+                    if (type is 0x1A or 0x16)
+                    {
+                        if (audioAssembler.TryAppend(
+                                type, totalFrame, curFrame, payloadBuf, payLen, out byte[] full))
+                            HandleAudioFrame(type, full, needDecrypt, mode, rtsp, stdout);
+                        continue;
+                    }
+
+                    Console.Error.WriteLine($"[FRAME] unknown type=0x{type:X2} len={payLen}");
                 }
             }
             catch (OperationCanceledException)
@@ -496,14 +419,137 @@ namespace V380Decoder.src
             }
         }
 
-        private void DecryptVideoFrame(byte[] data, int length)
+        private void HandleVideoFrame(
+            byte rawType,
+            byte[] full,
+            bool needDecrypt,
+            OutputMode outputMode,
+            RtspServer rtsp,
+            Stream stdout)
         {
-            using var aes = Aes.Create();
-            aes.Key = aesKey; aes.Mode = CipherMode.ECB; aes.Padding = PaddingMode.None;
-            using var dec = aes.CreateDecryptor();
-            for (int offset = 0; offset + 64 <= length; offset += 80)
-                for (int i = 0; i < 4; i++)
-                    dec.TransformBlock(data, offset + i * 16, 16, data, offset + i * 16);
+            if (full.Length <= 16)
+            {
+                Console.Error.WriteLine($"[VIDEO] short frame type=0x{rawType:X2} len={full.Length}");
+                return;
+            }
+
+            VideoCodec codec = rawType is 0x28 or 0x29
+                ? VideoCodec.H265
+                : VideoCodec.H264;
+
+            if (!TryExtractVideoPayload(full, codec, needDecrypt, out byte[] payload))
+            {
+                Console.Error.WriteLine(
+                    $"[VIDEO] no valid {codec} Annex-B payload type=0x{rawType:X2} len={full.Length}");
+                return;
+            }
+
+            uint frameId = ReadUInt32LE(full, 0);
+            ushort frameType = ReadUInt16LE(full, 4);
+            ushort frameRate = ReadUInt16LE(full, 6);
+            ulong timestamp = ReadUInt64LE(full, 8);
+            bool isKeyframe = rawType is 0x00 or 0x28;
+
+            snapshotManager.UpdateFrame(
+                payload, frameWidth, frameheight, isKeyframe, codec);
+
+            var frame = new FrameData
+            {
+                RawType = rawType,
+                FrameId = frameId,
+                FrameType = frameType,
+                FrameRate = frameRate,
+                Timestamp = timestamp,
+                Codec = codec,
+                Payload = payload
+            };
+
+            if (outputMode == OutputMode.Video)
+            {
+                stdout?.Write(payload, 0, payload.Length);
+                stdout?.Flush();
+            }
+            else if (outputMode == OutputMode.Rtsp)
+            {
+                rtsp?.PushVideo(frame);
+            }
+        }
+
+        private void HandleAudioFrame(
+            byte rawType,
+            byte[] full,
+            bool needDecrypt,
+            OutputMode outputMode,
+            RtspServer rtsp,
+            Stream stdout)
+        {
+            int headerSize = rawType == 0x16 ? 20 : 16;
+            if (full.Length <= headerSize) return;
+
+            uint frameId = ReadUInt32LE(full, 0);
+            ushort frameType = ReadUInt16LE(full, 4);
+            ushort frameRate = ReadUInt16LE(full, 6);
+            ulong timestamp = ReadUInt64LE(full, 8);
+
+            byte[] payload = new byte[full.Length - headerSize];
+            Array.Copy(full, headerSize, payload, 0, payload.Length);
+
+            if (needDecrypt)
+            {
+                if (communicationVersion == 21)
+                    DecryptMediaPre2k(payload, payload.Length, 1);
+                else
+                    DecryptAudioFrame(payload, payload.Length);
+            }
+
+            if (outputMode == OutputMode.Audio)
+            {
+                stdout?.Write(payload, 0, payload.Length);
+                stdout?.Flush();
+                return;
+            }
+
+            if (outputMode != OutputMode.Rtsp) return;
+
+            if (rawType == 0x16)
+            {
+                if (!reportedExtendedAudio)
+                {
+                    Console.Error.WriteLine(
+                        "[AUDIO] type 0x16 received; RTSP output is skipped because it is not PCMA");
+                    reportedExtendedAudio = true;
+                }
+                return;
+            }
+
+            rtsp?.PushAudio(new FrameData
+            {
+                RawType = rawType,
+                FrameId = frameId,
+                FrameType = frameType,
+                FrameRate = frameRate,
+                Timestamp = timestamp,
+                Payload = payload
+            });
+        }
+
+        private bool TryExtractVideoPayload(
+            byte[] full,
+            VideoCodec codec,
+            bool needDecrypt,
+            out byte[] payload)
+        {
+            bool decoded = videoPayloadDecoder.TryDecode(
+                full, codec, needDecrypt, out payload, out bool selectionChanged);
+
+            if (decoded && selectionChanged)
+            {
+                Console.Error.WriteLine(
+                    $"[VIDEO] codec={codec} decrypt={videoPayloadDecoder.SelectedMode} " +
+                    $"header={videoPayloadDecoder.SelectedHeaderSize} score={videoPayloadDecoder.LastScore}");
+            }
+
+            return decoded;
         }
 
         private void DecryptAudioFrame(byte[] data, int length)
@@ -540,6 +586,82 @@ namespace V380Decoder.src
                 aes.Padding = PaddingMode.None;
                 using var decryptor = aes.CreateDecryptor();
                 decryptor.TransformBlock(data, 0, decryptLength, data, 0);
+            }
+        }
+
+        private sealed class FragmentAssembler
+        {
+            private const int MaxFrameBytes = 32 * 1024 * 1024;
+            private readonly string mediaName;
+            private readonly List<byte> bytes = new();
+            private bool active;
+            private byte type;
+            private ushort total;
+            private ushort next;
+
+            public FragmentAssembler(string mediaName)
+            {
+                this.mediaName = mediaName;
+            }
+
+            public bool TryAppend(
+                byte fragmentType,
+                ushort fragmentTotal,
+                ushort fragmentIndex,
+                byte[] data,
+                int length,
+                out byte[] frame)
+            {
+                frame = Array.Empty<byte>();
+
+                if (fragmentIndex == 0)
+                {
+                    Reset();
+                    active = true;
+                    type = fragmentType;
+                    total = fragmentTotal;
+                }
+                else if (!active ||
+                         fragmentType != type ||
+                         fragmentTotal != total ||
+                         fragmentIndex != next)
+                {
+                    Console.Error.WriteLine(
+                        $"[{mediaName}] fragment gap type=0x{fragmentType:X2} " +
+                        $"expected={next} got={fragmentIndex} total={fragmentTotal}");
+                    Reset();
+                    return false;
+                }
+
+                if (!active || fragmentIndex != next)
+                    return false;
+
+                if (bytes.Count + length > MaxFrameBytes)
+                {
+                    Console.Error.WriteLine($"[{mediaName}] frame exceeds {MaxFrameBytes} bytes");
+                    Reset();
+                    return false;
+                }
+
+                for (int i = 0; i < length; i++)
+                    bytes.Add(data[i]);
+
+                next = (ushort)(fragmentIndex + 1);
+                if (fragmentIndex != fragmentTotal - 1)
+                    return false;
+
+                frame = bytes.ToArray();
+                Reset();
+                return true;
+            }
+
+            private void Reset()
+            {
+                bytes.Clear();
+                active = false;
+                type = 0;
+                total = 0;
+                next = 0;
             }
         }
 
