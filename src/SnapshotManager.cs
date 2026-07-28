@@ -12,6 +12,8 @@ namespace V380Decoder.src
         private readonly object _lock = new();
         private byte[] _cachedJpeg = null;
         private int _width, _height;
+        private VideoCodec _codec = VideoCodec.H264;
+        private bool _codecKnown;
 
         // ── mjpeg subscribers ─────────────────────────────────────
         private readonly List<Action<byte[]>> _subscribers = new();
@@ -29,6 +31,8 @@ namespace V380Decoder.src
         // FFmpeg path
         private Process _ffmpegProc;
         private Stream _ffmpegStdin;
+        private VideoCodec? _ffmpegCodec;
+        private bool _ffmpegAwaitingKeyframe = true;
 
         // Frame queue 
         private readonly System.Threading.Channels.Channel<(byte[] data, bool isIFrame)> _queue =
@@ -39,21 +43,20 @@ namespace V380Decoder.src
             SingleReader = true
         });
 
-        // SPS/PPS for prepend to I-frame (H264Sharp path)
-        private byte[] _sps, _pps;
+        // H.264 SPS/PPS or H.265 VPS/SPS/PPS
+        private byte[] _vps, _sps, _pps;
 
         private bool _mjpegActive = false;
         private byte[] _lastIFrame = null;
         private readonly SemaphoreSlim _snapshotSem = new(1, 1);
+        private bool _reportedMissingHevcDecoder;
 
         public SnapshotManager()
         {
             _useFFmpeg = IsFFmpegAvailable();
             LogUtils.debug($"[SNAP] decoder={(_useFFmpeg ? "FFmpeg" : "H264Sharp")}");
 
-            if (_useFFmpeg)
-                StartFFmpegPipe();
-            else
+            if (!_useFFmpeg)
                 _decoder = new H264Decoder();
 
             Task.Run(() => DecodeLoop(_cts.Token));
@@ -65,20 +68,44 @@ namespace V380Decoder.src
         {
             _mjpegActive = active;
             LogUtils.debug($"[SNAP] MJPEG {(active ? "enable" : "disabled")}");
+
+            if (active && _useFFmpeg && _codecKnown)
+                EnsureFFmpegPipe(_codec);
         }
 
-        public void UpdateFrame(byte[] h264Frame, int width, int height, bool isIFrame)
+        public void UpdateFrame(
+            byte[] frame,
+            int width,
+            int height,
+            bool isIFrame,
+            VideoCodec codec)
         {
+            bool codecChanged;
             lock (_lock)
             {
                 _width = width;
                 _height = height;
+                codecChanged = !_codecKnown || _codec != codec;
+                if (codecChanged)
+                {
+                    _codec = codec;
+                    _codecKnown = true;
+                    _vps = null;
+                    _sps = null;
+                    _pps = null;
+                    _lastIFrame = null;
+                    _cachedJpeg = null;
+                }
             }
+
+            if (codecChanged)
+                LogUtils.debug($"[SNAP] codec={codec}");
+
+            ExtractParameterSets(frame, codec);
 
             if (isIFrame)
             {
-                ExtractSpsAndPps(h264Frame);
-                lock (_lock) { _lastIFrame = (byte[])h264Frame.Clone(); }
+                lock (_lock) { _lastIFrame = (byte[])frame.Clone(); }
             }
 
             if (!_mjpegActive) return;
@@ -87,9 +114,18 @@ namespace V380Decoder.src
             {
                 try
                 {
+                    EnsureFFmpegPipe(codec);
                     lock (_ffmpegLock)
                     {
-                        _ffmpegStdin?.Write(h264Frame, 0, h264Frame.Length);
+                        if (_ffmpegAwaitingKeyframe && !isIFrame)
+                            return;
+
+                        byte[] pipeFrame = isIFrame && HasParameterSets(codec)
+                            ? PrependParameterSets(frame, codec)
+                            : frame;
+
+                        _ffmpegAwaitingKeyframe = false;
+                        _ffmpegStdin?.Write(pipeFrame, 0, pipeFrame.Length);
                         _ffmpegStdin?.Flush();
                     }
                 }
@@ -97,7 +133,15 @@ namespace V380Decoder.src
             }
             else
             {
-                _queue.Writer.TryWrite(((byte[])h264Frame.Clone(), isIFrame));
+                if (codec == VideoCodec.H264)
+                {
+                    _queue.Writer.TryWrite(((byte[])frame.Clone(), isIFrame));
+                }
+                else if (!_reportedMissingHevcDecoder)
+                {
+                    Console.Error.WriteLine("[SNAP] FFmpeg is required to decode H.265 snapshots");
+                    _reportedMissingHevcDecoder = true;
+                }
             }
         }
 
@@ -121,18 +165,32 @@ namespace V380Decoder.src
             try
             {
                 byte[] iFrame;
-                int w, h;
-                lock (_lock) { iFrame = _lastIFrame; w = _width; h = _height; }
+                VideoCodec codec;
+                lock (_lock)
+                {
+                    iFrame = _lastIFrame;
+                    codec = _codec;
+                }
 
-                if (iFrame == null || _sps == null || _pps == null)
+                if (iFrame == null || !HasParameterSets(codec))
                 {
                     lock (_lock) { return _cachedJpeg; }
                 }
 
-                byte[] input = PrependSpsAndPps(iFrame);
+                if (codec == VideoCodec.H265 && !_useFFmpeg)
+                {
+                    if (!_reportedMissingHevcDecoder)
+                    {
+                        Console.Error.WriteLine("[SNAP] FFmpeg is required to decode H.265 snapshots");
+                        _reportedMissingHevcDecoder = true;
+                    }
+                    lock (_lock) { return _cachedJpeg; }
+                }
+
+                byte[] input = PrependParameterSets(iFrame, codec);
 
                 byte[] jpeg = _useFFmpeg
-                    ? await DecodeOneFrameFFmpeg(input)
+                    ? await DecodeOneFrameFFmpeg(input, codec)
                     : DecodeH264Sharp(input, isIFrame: true);
 
                 if (jpeg != null)
@@ -159,22 +217,26 @@ namespace V380Decoder.src
             if (_useFFmpeg)
                 return;
 
-            await foreach (var (data, isIFrame) in _queue.Reader.ReadAllAsync(ct))
+            try
             {
-                try
+                await foreach (var (data, isIFrame) in _queue.Reader.ReadAllAsync(ct))
                 {
-                    var jpeg = DecodeH264Sharp(data, isIFrame);
-                    if (jpeg != null)
+                    try
                     {
-                        lock (_lock) { _cachedJpeg = jpeg; }
-                        Notify(jpeg);
+                        var jpeg = DecodeH264Sharp(data, isIFrame);
+                        if (jpeg != null)
+                        {
+                            lock (_lock) { _cachedJpeg = jpeg; }
+                            Notify(jpeg);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogUtils.debug($"[SNAP] DecodeLoop error: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    LogUtils.debug($"[SNAP] DecodeLoop error: {ex.Message}");
-                }
             }
+            catch (OperationCanceledException) { }
         }
 
         // ── H264Sharp ─────────────────────────────────────────────
@@ -191,7 +253,7 @@ namespace V380Decoder.src
             lock (_lock) { w = _width; h = _height; }
 
             byte[] input = (isIFrame && _sps != null && _pps != null)
-                ? PrependSpsAndPps(h264Data)
+                ? PrependParameterSets(h264Data, VideoCodec.H264)
                 : h264Data;
 
             var rgb = new RgbImage(ImageFormat.Bgr, w, h);
@@ -213,13 +275,30 @@ namespace V380Decoder.src
 
         // ── FFmpeg persistent pipe ────────────────────────────────
 
-        private void StartFFmpegPipe()
+        private void EnsureFFmpegPipe(VideoCodec codec)
         {
+            lock (_ffmpegLock)
+            {
+                bool running = false;
+                try { running = _ffmpegProc != null && !_ffmpegProc.HasExited; }
+                catch { }
+
+                if (running && _ffmpegCodec == codec && _ffmpegStdin != null)
+                    return;
+
+                StopFFmpegPipe();
+                StartFFmpegPipe(codec);
+            }
+        }
+
+        private void StartFFmpegPipe(VideoCodec codec)
+        {
+            string inputFormat = codec == VideoCodec.H265 ? "hevc" : "h264";
             var psi = new ProcessStartInfo
             {
                 FileName = "ffmpeg",
                 Arguments = "-hide_banner -loglevel error " +
-                            "-f h264 -i pipe:0 " +
+                            $"-f {inputFormat} -i pipe:0 " +
                             "-q:v 4 -f image2pipe -vcodec mjpeg pipe:1",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
@@ -229,21 +308,47 @@ namespace V380Decoder.src
 
             _ffmpegProc = Process.Start(psi)!;
             _ffmpegStdin = _ffmpegProc.StandardInput.BaseStream;
+            _ffmpegCodec = codec;
+            _ffmpegAwaitingKeyframe = true;
+            Stream output = _ffmpegProc.StandardOutput.BaseStream;
 
-            Task.Run(() => ReadFFmpegOutput(_ffmpegProc.StandardOutput.BaseStream, _cts.Token));
-            LogUtils.debug("[SNAP] FFmpeg pipe started");
+            Task.Run(() => ReadFFmpegOutput(output, _cts.Token));
+            LogUtils.debug($"[SNAP] FFmpeg {inputFormat} pipe started");
         }
 
-        private async Task<byte[]> DecodeOneFrameFFmpeg(byte[] h264Data)
+        private void StopFFmpegPipe()
+        {
+            try { _ffmpegStdin?.Close(); } catch { }
+            try
+            {
+                if (_ffmpegProc != null && !_ffmpegProc.HasExited)
+                    _ffmpegProc.WaitForExit(1000);
+            }
+            catch { }
+            try
+            {
+                if (_ffmpegProc != null && !_ffmpegProc.HasExited)
+                    _ffmpegProc.Kill();
+            }
+            catch { }
+            _ffmpegProc?.Dispose();
+            _ffmpegProc = null;
+            _ffmpegStdin = null;
+            _ffmpegCodec = null;
+            _ffmpegAwaitingKeyframe = true;
+        }
+
+        private async Task<byte[]> DecodeOneFrameFFmpeg(byte[] videoData, VideoCodec codec)
         {
             try
             {
+                string inputFormat = codec == VideoCodec.H265 ? "hevc" : "h264";
                 var psi = new ProcessStartInfo
                 {
                     FileName = "ffmpeg",
                     Arguments = "-hide_banner -loglevel error " +
-                                "-f h264 -i pipe:0 " +
-                                "-frames:v 1 -q:v 2 -f image2 pipe:1",
+                                $"-f {inputFormat} -i pipe:0 " +
+                                "-frames:v 1 -q:v 2 -f image2 -vcodec mjpeg pipe:1",
                     UseShellExecute = false,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
@@ -251,7 +356,7 @@ namespace V380Decoder.src
                 };
 
                 using var proc = Process.Start(psi)!;
-                await proc.StandardInput.BaseStream.WriteAsync(h264Data);
+                await proc.StandardInput.BaseStream.WriteAsync(videoData);
                 proc.StandardInput.Close();
 
                 using var ms = new MemoryStream();
@@ -313,50 +418,89 @@ namespace V380Decoder.src
 
         // ── helpers ───────────────────────────────────────────────
 
-        private void ExtractSpsAndPps(byte[] h264Data)
+        private void ExtractParameterSets(byte[] data, VideoCodec codec)
         {
-            var nals = FindNalUnits(h264Data);
-            foreach (var nal in nals)
+            AnnexB.Parse(data, codec, (nalType, nal) =>
             {
-                if (nal.Length == 0) continue;
-                int t = nal[0] & 0x1F;
-                if (t == 7) { _sps = (byte[])nal.Clone(); LogUtils.debug($"[SNAP] SPS {_sps.Length}b"); }
-                if (t == 8) { _pps = (byte[])nal.Clone(); LogUtils.debug($"[SNAP] PPS {_pps.Length}b"); }
-            }
-        }
-
-        private static List<byte[]> FindNalUnits(byte[] data)
-        {
-            var result = new List<byte[]>();
-            int i = 0;
-            while (i < data.Length - 4)
-            {
-                if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1)
+                lock (_lock)
                 {
-                    int start = i + 4, end = start;
-                    while (end < data.Length - 4)
+                    if (codec == VideoCodec.H264)
                     {
-                        if (data[end] == 0 && data[end + 1] == 0 && data[end + 2] == 0 && data[end + 3] == 1) break;
-                        end++;
+                        if (nalType == 7)
+                        {
+                            bool changed = _sps == null || !_sps.SequenceEqual(nal);
+                            _sps = nal;
+                            if (changed) LogUtils.debug($"[SNAP] H264 SPS {_sps.Length}b");
+                        }
+                        else if (nalType == 8)
+                        {
+                            bool changed = _pps == null || !_pps.SequenceEqual(nal);
+                            _pps = nal;
+                            if (changed) LogUtils.debug($"[SNAP] H264 PPS {_pps.Length}b");
+                        }
+                        return;
                     }
-                    if (end >= data.Length - 4) end = data.Length;
-                    var nal = new byte[end - start];
-                    Array.Copy(data, start, nal, 0, nal.Length);
-                    result.Add(nal);
-                    i = end;
+
+                    if (nalType == 32)
+                    {
+                        bool changed = _vps == null || !_vps.SequenceEqual(nal);
+                        _vps = nal;
+                        if (changed) LogUtils.debug($"[SNAP] H265 VPS {_vps.Length}b");
+                    }
+                    else if (nalType == 33)
+                    {
+                        bool changed = _sps == null || !_sps.SequenceEqual(nal);
+                        _sps = nal;
+                        if (changed) LogUtils.debug($"[SNAP] H265 SPS {_sps.Length}b");
+                    }
+                    else if (nalType == 34)
+                    {
+                        bool changed = _pps == null || !_pps.SequenceEqual(nal);
+                        _pps = nal;
+                        if (changed) LogUtils.debug($"[SNAP] H265 PPS {_pps.Length}b");
+                    }
                 }
-                else i++;
-            }
-            return result;
+            });
         }
 
-        private byte[] PrependSpsAndPps(byte[] idrFrame)
+        private bool HasParameterSets(VideoCodec codec)
+        {
+            lock (_lock)
+            {
+                return codec == VideoCodec.H265
+                    ? _vps != null && _sps != null && _pps != null
+                    : _sps != null && _pps != null;
+            }
+        }
+
+        private byte[] PrependParameterSets(byte[] keyframe, VideoCodec codec)
         {
             byte[] sc = { 0x00, 0x00, 0x00, 0x01 };
+            byte[] vps, sps, pps;
+            lock (_lock)
+            {
+                vps = _vps;
+                sps = _sps;
+                pps = _pps;
+            }
+
             using var ms = new MemoryStream();
-            ms.Write(sc); ms.Write(_sps);
-            ms.Write(sc); ms.Write(_pps);
-            ms.Write(idrFrame);
+            if (codec == VideoCodec.H265 && vps != null)
+            {
+                ms.Write(sc);
+                ms.Write(vps);
+            }
+            if (sps != null)
+            {
+                ms.Write(sc);
+                ms.Write(sps);
+            }
+            if (pps != null)
+            {
+                ms.Write(sc);
+                ms.Write(pps);
+            }
+            ms.Write(keyframe);
             return ms.ToArray();
         }
 
@@ -409,10 +553,8 @@ namespace V380Decoder.src
             _cts.Cancel();
             _queue.Writer.Complete();
 
-            try { _ffmpegStdin?.Close(); } catch { }
-            try { _ffmpegProc?.WaitForExit(2000); } catch { }
-            try { _ffmpegProc?.Kill(); } catch { }
-            _ffmpegProc?.Dispose();
+            lock (_ffmpegLock)
+                StopFFmpegPipe();
 
             _decoder?.Dispose();
         }

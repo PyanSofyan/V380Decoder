@@ -151,6 +151,8 @@ namespace V380Decoder.src
                         byte ch = (byte)(isAudio ? 2 : 0);
                         var m = System.Text.RegularExpressions.Regex.Match(transport, @"interleaved=(\d+)-(\d+)");
                         if (m.Success) ch = byte.Parse(m.Groups[1].Value);
+                        if (isAudio) audioCh = ch;
+                        else videoCh = ch;
 
                         Reply(cseq,
                             $"Transport: RTP/AVP/TCP;unicast;interleaved={ch}-{ch + 1}",
@@ -196,51 +198,109 @@ namespace V380Decoder.src
             catch { alive = false; }
         }
 
-        // ── RTP video push  (H.264 Annex-B → RTP NAL/FU-A) ──────
+        // ── RTP video push (Annex-B H.264/H.265 → RTP) ──────────
         public void PushVideo(FrameData f)
         {
             if (!playing) return;
 
             // RTP timestamp: 90000 Hz, camera timestamp in milliseconds
             uint rts = (uint)(f.Timestamp * 90);
+            var nals = new List<byte[]>();
+            RtspServer.ParseNals(f.Payload, f.Codec, (_, nal) => nals.Add(nal));
 
-            RtspServer.ParseNals(f.Payload, (nalType, nal) =>
+            for (int index = 0; index < nals.Count; index++)
             {
-                const int MTU = 1400;
-                if (nal.Length <= MTU)
-                {
-                    // Single NAL unit packet
-                    SendRtp(videoCh, 96, videoSeq++, rts, videoSsrc, nal, 0, nal.Length, marker: true);
-                }
+                bool lastNal = index == nals.Count - 1;
+                if (f.Codec == VideoCodec.H265)
+                    PushH265Nal(nals[index], rts, lastNal);
                 else
-                {
-                    // FU-A fragmentation
-                    byte nalHdr = nal[0];
-                    byte fuInd = (byte)((nalHdr & 0xE0) | 28); // NRI from original, type=28
-                    int offset = 1; // skip original NAL header
-                    bool first = true;
+                    PushH264Nal(nals[index], rts, lastNal);
+            }
+        }
 
-                    while (offset < nal.Length)
-                    {
-                        int chunk = Math.Min(MTU - 2, nal.Length - offset);
-                        bool last = offset + chunk >= nal.Length;
+        private void PushH264Nal(byte[] nal, uint timestamp, bool lastNal)
+        {
+            const int MaxPayload = 1400;
+            if (nal.Length <= MaxPayload)
+            {
+                SendRtp(
+                    videoCh, 96, videoSeq++, timestamp, videoSsrc,
+                    nal, 0, nal.Length, marker: lastNal);
+                return;
+            }
 
-                        byte fuHdr = (byte)(nalHdr & 0x1F);              // NAL type
-                        if (first) fuHdr |= 0x80;                        // S bit
-                        if (last) fuHdr |= 0x40;                        // E bit
+            byte nalHeader = nal[0];
+            byte fuIndicator = (byte)((nalHeader & 0xE0) | 28);
+            int offset = 1;
+            bool first = true;
 
-                        var frag = new byte[2 + chunk];
-                        frag[0] = fuInd;
-                        frag[1] = fuHdr;
-                        Array.Copy(nal, offset, frag, 2, chunk);
+            while (offset < nal.Length)
+            {
+                int chunk = Math.Min(MaxPayload - 2, nal.Length - offset);
+                bool lastFragment = offset + chunk >= nal.Length;
+                byte fuHeader = (byte)(nalHeader & 0x1F);
+                if (first) fuHeader |= 0x80;
+                if (lastFragment) fuHeader |= 0x40;
 
-                        SendRtp(videoCh, 96, videoSeq++, rts, videoSsrc,
-                                frag, 0, frag.Length, marker: last);
-                        offset += chunk;
-                        first = false;
-                    }
-                }
-            });
+                var fragment = new byte[2 + chunk];
+                fragment[0] = fuIndicator;
+                fragment[1] = fuHeader;
+                Array.Copy(nal, offset, fragment, 2, chunk);
+
+                SendRtp(
+                    videoCh, 96, videoSeq++, timestamp, videoSsrc,
+                    fragment, 0, fragment.Length,
+                    marker: lastNal && lastFragment);
+
+                offset += chunk;
+                first = false;
+            }
+        }
+
+        private void PushH265Nal(byte[] nal, uint timestamp, bool lastNal)
+        {
+            const int MaxPayload = 1400;
+            if (nal.Length < 2) return;
+
+            if (nal.Length <= MaxPayload)
+            {
+                SendRtp(
+                    videoCh, 97, videoSeq++, timestamp, videoSsrc,
+                    nal, 0, nal.Length, marker: lastNal);
+                return;
+            }
+
+            int nalType = (nal[0] >> 1) & 0x3F;
+
+            // RFC 7798 section 4.4.3:
+            // two-byte PayloadHdr (type 49) + one-byte FU header.
+            byte payloadHeader0 = (byte)((nal[0] & 0x81) | (49 << 1));
+            byte payloadHeader1 = nal[1];
+            int offset = 2;
+            bool first = true;
+
+            while (offset < nal.Length)
+            {
+                int chunk = Math.Min(MaxPayload - 3, nal.Length - offset);
+                bool lastFragment = offset + chunk >= nal.Length;
+                byte fuHeader = (byte)nalType;
+                if (first) fuHeader |= 0x80;
+                if (lastFragment) fuHeader |= 0x40;
+
+                var fragment = new byte[3 + chunk];
+                fragment[0] = payloadHeader0;
+                fragment[1] = payloadHeader1;
+                fragment[2] = fuHeader;
+                Array.Copy(nal, offset, fragment, 3, chunk);
+
+                SendRtp(
+                    videoCh, 97, videoSeq++, timestamp, videoSsrc,
+                    fragment, 0, fragment.Length,
+                    marker: lastNal && lastFragment);
+
+                offset += chunk;
+                first = false;
+            }
         }
 
         // ── RTP audio push  (PCMA raw samples) ──────────────────
