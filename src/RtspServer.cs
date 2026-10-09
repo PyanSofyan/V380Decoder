@@ -219,9 +219,8 @@ namespace V380Decoder.src
                 {
                     string spsB64 = Convert.ToBase64String(cachedSps);
                     string ppsB64 = Convert.ToBase64String(cachedPps);
-                    // profile-level-id = first 3 bytes of SPS (after NAL header)
-                    string pli = cachedSps.Length >= 3
-                        ? $"{cachedSps[0]:X2}{cachedSps[1]:X2}{cachedSps[2]:X2}"
+                    string pli = cachedSps.Length >= 4
+                        ? $"{cachedSps[1]:X2}{cachedSps[2]:X2}{cachedSps[3]:X2}"
                         : "64001F";
                     fmtp = $"a=fmtp:96 packetization-mode=1;sprop-parameter-sets={spsB64},{ppsB64};profile-level-id={pli}\r\n";
                 }

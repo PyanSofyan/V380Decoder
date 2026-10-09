@@ -333,23 +333,36 @@ namespace V380Decoder.src
         {
             var result = new List<byte[]>();
             int i = 0;
-            while (i < data.Length - 4)
+            int len = data.Length;
+            while (i + 3 <= len)
             {
-                if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1)
+                int scLen = 0;
+                if (data[i] == 0 && data[i + 1] == 0)
                 {
-                    int start = i + 4, end = start;
-                    while (end < data.Length - 4)
+                    if (data[i + 2] == 1) scLen = 3;
+                    else if (i + 4 <= len && data[i + 2] == 0 && data[i + 3] == 1) scLen = 4;
+                }
+
+                if (scLen > 0)
+                {
+                    int start = i + scLen;
+                    int next = start;
+                    while (next + 3 <= len)
                     {
-                        if (data[end] == 0 && data[end + 1] == 0 && data[end + 2] == 0 && data[end + 3] == 1) break;
-                        end++;
+                        if (data[next] == 0 && data[next + 1] == 0 && (data[next + 2] == 1 || (next + 4 <= len && data[next + 2] == 0 && data[next + 3] == 1)))
+                            break;
+                        next++;
                     }
-                    if (end >= data.Length - 4) end = data.Length;
-                    var nal = new byte[end - start];
+                    if (next + 3 > len) next = len;
+                    var nal = new byte[next - start];
                     Array.Copy(data, start, nal, 0, nal.Length);
                     result.Add(nal);
-                    i = end;
+                    i = next;
                 }
-                else i++;
+                else
+                {
+                    i++;
+                }
             }
             return result;
         }
@@ -366,7 +379,7 @@ namespace V380Decoder.src
 
         private static byte[] ToJpeg(byte[] bgr, int w, int h)
         {
-            using var img = Image.LoadPixelData<Rgb24>(bgr, w, h);
+            using var img = Image.LoadPixelData<Bgr24>(bgr, w, h);
             using var ms = new MemoryStream();
             img.Save(ms, new JpegEncoder { Quality = 80 });
             return ms.ToArray();

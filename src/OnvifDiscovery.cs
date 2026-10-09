@@ -100,29 +100,21 @@ namespace V380Decoder.src
         public void Dispose()
         {
             running = false;
-
-            // Tunggu thread selesai (maksimal 2 detik)
-            try
-            {
-                if (acceptThread?.IsAlive == true)
-                {
-                    acceptThread.Join(TimeSpan.FromSeconds(2));
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ONVIF] Error waiting for AcceptLoop: {ex.Message}");
-            }
-
             try
             {
                 udp?.Close();
                 udp?.Dispose();
             }
-            catch (Exception ex)
+            catch { }
+
+            try
             {
-                Console.Error.WriteLine($"[ONVIF] Error disposing UDP: {ex.Message}");
+                if (acceptThread?.IsAlive == true)
+                {
+                    acceptThread.Join(TimeSpan.FromMilliseconds(500));
+                }
             }
+            catch { }
         }
     }
 }

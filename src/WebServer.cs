@@ -151,20 +151,20 @@ namespace V380Decoder.src
 
                 api.MapGet("/", () => Results.Content(WebPage.GetHtml(enableMjpeg), "text/html"));
 
-                api.MapPost("/api/ptz/right", () => { client.PtzRight(); LogUtils.debug("[API] PTZ Right"); Results.Ok(); });
-                api.MapPost("/api/ptz/left", () => { client.PtzLeft(); LogUtils.debug("[API] PTZ Left"); Results.Ok(); });
-                api.MapPost("/api/ptz/up", () => { client.PtzUp(); LogUtils.debug("[API] PTZ Up"); Results.Ok(); });
-                api.MapPost("/api/ptz/down", () => { client.PtzDown(); LogUtils.debug("[API] PTZ Down"); Results.Ok(); });
-                api.MapPost("/api/ptz/stop", () => { client.PtzStop(); LogUtils.debug("[API] PTZ Stop"); Results.Ok(); });
+                api.MapPost("/api/ptz/right", () => { client.PtzRight(); LogUtils.debug("[API] PTZ Right"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/ptz/left", () => { client.PtzLeft(); LogUtils.debug("[API] PTZ Left"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/ptz/up", () => { client.PtzUp(); LogUtils.debug("[API] PTZ Up"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/ptz/down", () => { client.PtzDown(); LogUtils.debug("[API] PTZ Down"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/ptz/stop", () => { client.PtzStop(); LogUtils.debug("[API] PTZ Stop"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
 
-                api.MapPost("/api/light/on", () => { client.LightOn(); LogUtils.debug("[API] Light On"); Results.Ok(); });
-                api.MapPost("/api/light/off", () => { client.LightOff(); LogUtils.debug("[API] Light Off"); Results.Ok(); });
-                api.MapPost("/api/light/auto", () => { client.LightAuto(); LogUtils.debug("[API] Light Auto"); Results.Ok(); });
+                api.MapPost("/api/light/on", () => { client.LightOn(); LogUtils.debug("[API] Light On"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/light/off", () => { client.LightOff(); LogUtils.debug("[API] Light Off"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/light/auto", () => { client.LightAuto(); LogUtils.debug("[API] Light Auto"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
 
-                api.MapPost("/api/image/color", () => { client.ImageColor(); LogUtils.debug("[API] Image Color"); Results.Ok(); });
-                api.MapPost("/api/image/bw", () => { client.ImageBW(); LogUtils.debug("[API] Image B&W"); Results.Ok(); });
-                api.MapPost("/api/image/auto", () => { client.ImageAuto(); LogUtils.debug("[API] Image Auto"); Results.Ok(); });
-                api.MapPost("/api/image/flip", () => { client.ImageFlip(); LogUtils.debug("[API] Image Flip"); Results.Ok(); });
+                api.MapPost("/api/image/color", () => { client.ImageColor(); LogUtils.debug("[API] Image Color"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/image/bw", () => { client.ImageBW(); LogUtils.debug("[API] Image B&W"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/image/auto", () => { client.ImageAuto(); LogUtils.debug("[API] Image Auto"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/image/flip", () => { client.ImageFlip(); LogUtils.debug("[API] Image Flip"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
 
                 api.MapGet("/api/status", () => Results.Ok(new StatusResponse
                 {

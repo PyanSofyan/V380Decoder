@@ -178,7 +178,7 @@ namespace V380Decoder.src
                             <button class='btn' onclick='cmd(""/api/ptz/up"")'>UP</button>
                             <div></div>
                             <button class='btn' onclick='cmd(""/api/ptz/left"")'>LEFT</button>
-                            <button class='btn'></button>
+                            <button class='btn' onclick='cmd(""/api/ptz/stop"")'>STOP</button>
                             <button class='btn' onclick='cmd(""/api/ptz/right"")'>RIGHT</button>
                             <div></div>
                             <button class='btn' onclick='cmd(""/api/ptz/down"")'>DOWN</button>
@@ -209,10 +209,12 @@ namespace V380Decoder.src
 
                 <script>
                     async function cmd(url) {{
-                        const status = document.getElementById('status');
-                        const res = await fetch(url, {{ method: 'POST' }});
-                        const data = await res.json();
-                        console.log(data);
+                        try {{
+                            const res = await fetch(url, {{ method: 'POST' }});
+                            if (!res.ok) console.error('Command failed:', res.status);
+                        }} catch (e) {{
+                            console.error('Request error:', e);
+                        }}
                     }}
                 </script>
             </body>

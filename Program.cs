@@ -74,6 +74,7 @@ if (args.Length > 0)
         if (string.IsNullOrEmpty(relayIp))
         {
             Console.Error.WriteLine("[V380] failed to get relay server");
+            return;
         }
         Console.Error.WriteLine($"[V380] using relay server {relayIp}");
     }
@@ -133,7 +134,6 @@ if (args.Length > 0)
     AppDomain.CurrentDomain.ProcessExit += (sender, e) =>
     {
         cts.Cancel();
-        Thread.Sleep(2000);
     };
 
     try

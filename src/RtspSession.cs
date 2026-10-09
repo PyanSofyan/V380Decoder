@@ -151,11 +151,12 @@ namespace V380Decoder.src
                 case "SETUP":
                     {
                         bool isAudio = url.Contains("trackID=1");
-                        // Parse interleaved channels from client Transport header
-                        // e.g. Transport: RTP/AVP/TCP;unicast;interleaved=0-1
                         byte ch = (byte)(isAudio ? 2 : 0);
                         var m = System.Text.RegularExpressions.Regex.Match(transport, @"interleaved=(\d+)-(\d+)");
                         if (m.Success) ch = byte.Parse(m.Groups[1].Value);
+
+                        if (isAudio) audioCh = ch;
+                        else videoCh = ch;
 
                         Reply(cseq,
                             $"Transport: RTP/AVP/TCP;unicast;interleaved={ch}-{ch + 1}",
@@ -328,30 +329,36 @@ namespace V380Decoder.src
             }
         }
 
-        // ── Low-level RTP sender with RTSP interleaved framing ───
-        // RFC 2326 §10.12:  $ | channel (1B) | length (2B BE) | RTP packet
         void SendRtp(byte channel, byte pt, ushort seq, uint ts, uint ssrc,
                      byte[] payload, int offset, int length, bool marker)
         {
-            var rtp = new byte[12 + length];
-            rtp[0] = 0x80;
-            rtp[1] = (byte)((marker ? 0x80 : 0) | (pt & 0x7F));
-            rtp[2] = (byte)(seq >> 8);
-            rtp[3] = (byte)seq;
-            rtp[4] = (byte)(ts >> 24); rtp[5] = (byte)(ts >> 16);
-            rtp[6] = (byte)(ts >> 8); rtp[7] = (byte)ts;
-            rtp[8] = (byte)(ssrc >> 24); rtp[9] = (byte)(ssrc >> 16);
-            rtp[10] = (byte)(ssrc >> 8); rtp[11] = (byte)ssrc;
-            Array.Copy(payload, offset, rtp, 12, length);
+            int rtpLen = 12 + length;
+            var frame = new byte[4 + rtpLen];
 
-            var frame = new byte[4 + rtp.Length];
             frame[0] = 0x24; // '$'
             frame[1] = channel;
-            frame[2] = (byte)(rtp.Length >> 8);
-            frame[3] = (byte)rtp.Length;
-            Array.Copy(rtp, 0, frame, 4, rtp.Length);
+            frame[2] = (byte)(rtpLen >> 8);
+            frame[3] = (byte)rtpLen;
 
-            try { lock (ns) { ns.Write(frame, 0, frame.Length); ns.Flush(); } }
+            frame[4] = 0x80;
+            frame[5] = (byte)((marker ? 0x80 : 0) | (pt & 0x7F));
+            frame[6] = (byte)(seq >> 8);
+            frame[7] = (byte)seq;
+            frame[8] = (byte)(ts >> 24);
+            frame[9] = (byte)(ts >> 16);
+            frame[10] = (byte)(ts >> 8);
+            frame[11] = (byte)ts;
+            frame[12] = (byte)(ssrc >> 24);
+            frame[13] = (byte)(ssrc >> 16);
+            frame[14] = (byte)(ssrc >> 8);
+            frame[15] = (byte)ssrc;
+
+            Array.Copy(payload, offset, frame, 16, length);
+
+            try
+            {
+                lock (ns) { ns.Write(frame, 0, frame.Length); }
+            }
             catch { alive = false; }
         }
     }
