@@ -159,6 +159,8 @@ namespace V380Decoder.src
 
                 api.MapPost("/api/light/on", () => { client.LightOn(); LogUtils.debug("[API] Light On"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
                 api.MapPost("/api/light/off", () => { client.LightOff(); LogUtils.debug("[API] Light Off"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/siren/on", (int? seconds) => { var duration = Math.Clamp(seconds ?? 5, 1, 300); client.SirenOn(duration); LogUtils.debug($"[API] Siren On {duration}s"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
+                api.MapPost("/api/siren/off", () => { client.SirenOff(); LogUtils.debug("[API] Siren Off"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
                 api.MapPost("/api/light/auto", () => { client.LightAuto(); LogUtils.debug("[API] Light Auto"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
 
                 api.MapPost("/api/image/color", () => { client.ImageColor(); LogUtils.debug("[API] Image Color"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });

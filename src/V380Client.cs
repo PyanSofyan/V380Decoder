@@ -666,6 +666,40 @@ namespace V380Decoder.src
         public bool LightOn() => SendControl(V380Commands.LIGHT_ON);
         public bool LightOff() => SendControl(V380Commands.LIGHT_OFF);
         public bool LightAuto() => SendControl(V380Commands.LIGHT_AUTO);
+
+        private const int SirenRepeatMilliseconds = 500;
+        private CancellationTokenSource sirenCancellation;
+
+        /// <summary>Sounds the siren for the given time: the camera keeps it on only while SIREN_ON keeps arriving,
+        /// so it is repeated every 500 ms (as the official app does) until SirenOff() or the time runs out.</summary>
+        public bool SirenOn(int seconds)
+        {
+            sirenCancellation?.Cancel();
+            var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+            sirenCancellation = cancellation;
+            if (!SendControl(V380Commands.SIREN_ON)) return false;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        await Task.Delay(SirenRepeatMilliseconds, cancellation.Token);
+                        SendControl(V380Commands.SIREN_ON);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                if (sirenCancellation == cancellation) SendControl(V380Commands.SIREN_OFF);
+            });
+            return true;
+        }
+
+        public bool SirenOff()
+        {
+            sirenCancellation?.Cancel();
+            sirenCancellation = null;
+            return SendControl(V380Commands.SIREN_OFF);
+        }
         public bool ImageColor() => SendControl(V380Commands.IMAGE_COLOR);
         public bool ImageBW() => SendControl(V380Commands.IMAGE_BW);
         public bool ImageAuto() => SendControl(V380Commands.IMAGE_AUTO);

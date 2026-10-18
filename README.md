@@ -153,6 +153,14 @@ curl -X POST http://192.168.1.3:8080/api/light/off
 curl -X POST http://192.168.1.3:8080/api/light/auto
 ```
 
+**Siren:**
+```bash
+curl -X POST "http://192.168.1.3:8080/api/siren/on?seconds=10"   # sound for 10 s (default 5, max 300)
+curl -X POST http://192.168.1.3:8080/api/siren/off
+```
+The camera keeps the siren on only while the command keeps arriving, so `/api/siren/on` repeats it every 500 ms
+in the background (the official app does the same) until `/api/siren/off` or the time runs out.
+
 **Image Mode:**
 ```bash
 curl -X POST http://192.168.1.3:8080/api/image/color   # Day mode (color)
