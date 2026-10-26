@@ -196,7 +196,7 @@ namespace V380Decoder.src
                     </div>
 
                     <div class='section'>
-                        <div class='section-title'>Siren</div>
+                        <div class='section-title'>Siren (tested on fw 32 only)</div>
                         <div class='btn-group-light'>
                             <button class='btn btn-secondary' onclick='cmd(""/api/siren/on?seconds=5"")'>ON 5s</button>
                             <button class='btn btn-secondary' onclick='cmd(""/api/siren/off"")'>OFF</button>

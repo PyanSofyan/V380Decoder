@@ -160,6 +160,10 @@ curl -X POST http://192.168.1.3:8080/api/siren/off
 ```
 The camera keeps the siren on only while the command keeps arriving, so `/api/siren/on` repeats it every 500 ms
 in the background (the official app does the same) until `/api/siren/off` or the time runs out.
+Both endpoints return HTTP 503 when the command could not be sent (no active stream).
+
+> Tested only on firmware (device version) 32, model `HsXMQQFC`, over the cloud relay. LAN mode and
+> device-version 31 cameras are not verified; opcode `0xb9` may not exist on other models.
 
 **Image Mode:**
 ```bash
