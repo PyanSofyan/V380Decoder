@@ -666,6 +666,79 @@ namespace V380Decoder.src
         public bool LightOn() => SendControl(V380Commands.LIGHT_ON);
         public bool LightOff() => SendControl(V380Commands.LIGHT_OFF);
         public bool LightAuto() => SendControl(V380Commands.LIGHT_AUTO);
+
+        private const int SirenRepeatMilliseconds = 500;
+        // All siren writes and state changes happen under sirenLock. Every SirenOn/SirenOff/Dispose bumps
+        // sirenGeneration, so a repeat worker from an older generation can never send another SIREN_ON.
+        private readonly object sirenLock = new();
+        private CancellationTokenSource sirenCancellation;
+        private int sirenGeneration;
+
+        /// <summary>Sounds the siren for the given time: the camera keeps it on only while SIREN_ON keeps arriving,
+        /// so it is repeated every 500 ms (as the official app does) until SirenOff() or the time runs out.
+        /// Returns false when the first SIREN_ON could not be sent.</summary>
+        public bool SirenOn(int seconds)
+        {
+            CancellationTokenSource cancellation;
+            int generation;
+            lock (sirenLock)
+            {
+                StopSirenWorker();
+                if (!SendControl(V380Commands.SIREN_ON)) return false;
+                generation = sirenGeneration;
+                cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                sirenCancellation = cancellation;
+            }
+            _ = Task.Run(() => RepeatSiren(cancellation, generation));
+            return true;
+        }
+
+        public bool SirenOff()
+        {
+            lock (sirenLock)
+            {
+                StopSirenWorker();
+                return SendControl(V380Commands.SIREN_OFF);
+            }
+        }
+
+        private async Task RepeatSiren(CancellationTokenSource cancellation, int generation)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(SirenRepeatMilliseconds, cancellation.Token);
+                    lock (sirenLock)
+                    {
+                        if (generation != sirenGeneration) return;
+                        SendControl(V380Commands.SIREN_ON);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Time is up. Send OFF only if nobody else has taken over the siren meanwhile.
+                lock (sirenLock)
+                {
+                    if (generation != sirenGeneration) return;
+                    StopSirenWorker();
+                    SendControl(V380Commands.SIREN_OFF);
+                }
+            }
+            finally
+            {
+                cancellation.Dispose();
+            }
+        }
+
+        // Caller holds sirenLock. The worker disposes its own CancellationTokenSource when it exits.
+        private void StopSirenWorker()
+        {
+            sirenGeneration++;
+            sirenCancellation?.Cancel();
+            sirenCancellation = null;
+        }
         public bool ImageColor() => SendControl(V380Commands.IMAGE_COLOR);
         public bool ImageBW() => SendControl(V380Commands.IMAGE_BW);
         public bool ImageAuto() => SendControl(V380Commands.IMAGE_AUTO);
@@ -707,6 +780,15 @@ namespace V380Decoder.src
 
         public void Dispose()
         {
+            lock (sirenLock)
+            {
+                // Best effort: stop an active siren while the stream is still open.
+                if (sirenCancellation != null)
+                {
+                    StopSirenWorker();
+                    SendControl(V380Commands.SIREN_OFF);
+                }
+            }
             authStream?.Close(); authClient?.Close();
             streamStream?.Close(); streamClient?.Close();
             snapshotManager?.Dispose();
