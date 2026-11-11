@@ -612,14 +612,22 @@ namespace V380Decoder.src
             var buf = new byte[max];
             int tot = 0;
             var deadline = DateTime.UtcNow.AddSeconds(5);
+            var lastData = DateTime.UtcNow;
             while (DateTime.UtcNow < deadline && tot < max)
             {
-                if (s.DataAvailable || tot > 0)
+                if (s.DataAvailable)
                 {
                     int n = s.Read(buf, tot, max - tot);
                     if (n <= 0) break;
                     tot += n;
+                    lastData = DateTime.UtcNow;
                 }
+                // A reply has arrived and nothing more is coming: return it. Previously
+                // `tot > 0` forced a blocking Read() here, which only returned once the
+                // peer closed the connection. When a camera replies with fewer bytes than
+                // `max` (e.g. 32 instead of up to 412), that stalled for ~5 s until the
+                // camera dropped the idle connection, so StartStream was sent to a closed socket.
+                else if (tot > 0 && (DateTime.UtcNow - lastData).TotalMilliseconds > 300) break;
                 else Thread.Sleep(10);
             }
             if (tot == 0) return null;
