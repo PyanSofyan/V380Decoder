@@ -30,6 +30,7 @@ if (args.Length > 0)
     bool enableApi = ArgParser.GetArg(args, "--enable-api", false);
     bool enableMjpeg = ArgParser.GetArg(args, "--enable-mjpeg", false);
     int rtspPort = ArgParser.GetArg(args, "--rtsp-port", 8554);
+    int quality = ArgParser.GetArg(args, "--quality", 1);
     int httpPort = ArgParser.GetArg(args, "--http-port", 8080);
     bool secure = ArgParser.GetArg(args, "--secure", false);
     bool debug = ArgParser.GetArg(args, "--debug", false);
@@ -89,7 +90,8 @@ if (args.Length > 0)
         password,
         sourceStream,
         outputMode,
-        enableMjpeg
+        enableMjpeg,
+        quality
     );
 
     RtspServer rtsp = null;

@@ -22,11 +22,13 @@ namespace V380Decoder.src
         private int frameheight = 720;
         private byte[] aesKey = new byte[16];
         private bool needReconnect = false;
+        private int quality = 1; // 0=SD, 1=HD
         private DeviceInfo deviceInfo;
 
 
-        public V380Client(string ip, int port, uint deviceId, string username, string password, SourceStream source, OutputMode mode, bool enableMjpeg)
+        public V380Client(string ip, int port, uint deviceId, string username, string password, SourceStream source, OutputMode mode, bool enableMjpeg, int quality = 1)
         {
+            this.quality = (quality == 0) ? 0 : 1;
             this.ip = ip;
             this.port = port;
             this.deviceId = deviceId;
@@ -106,7 +108,7 @@ namespace V380Decoder.src
                 {
                     WriteUInt32LE(cmd1167, 4, 120); // unknown1
                     cmd1167[8] = 31; // unknown2 (version?)
-                    WriteUInt32LE(cmd1167, 9, 1); // unknown3            
+                    WriteUInt32LE(cmd1167, 9, 1); // unknown3
                     WriteUInt32LE(cmd1167, 13, deviceId); // deviceId
                     Array.Copy(userBytes, 0, cmd1167, 49, Math.Min(userBytes.Length, 32)); //username
                     Array.Copy(encryptedPassword, 0, cmd1167, 81, Math.Min(encryptedPassword.Length, 64)); //password
@@ -229,7 +231,8 @@ namespace V380Decoder.src
                 WriteUInt16LE(cmd301, 12, 20); //unknown2 
                 WriteUInt32LE(cmd301, 14, authTicket); //auth ticket
                 WriteUInt32LE(cmd301, 22, 4097); //audio 4096=off, 4097=on
-                WriteUInt32LE(cmd301, 26, 1);    //quality  0=SD, 1=HD
+                WriteUInt32LE(cmd301, 26, (uint)quality);    //quality  0=SD, 1=HD
+                cmd301[30] = 1; cmd301[31] = 1; cmd301[32] = 1;
             }
             else
             {
@@ -240,7 +243,7 @@ namespace V380Decoder.src
                 WriteUInt32LE(cmd301, 62, deviceId); //device id
                 WriteUInt32LE(cmd301, 66, authTicket); // auth ticket
                 WriteUInt32LE(cmd301, 70, sessionId); // session id
-                WriteUInt32LE(cmd301, 74, 1); //quality 0=SD, 1=HD
+                WriteUInt32LE(cmd301, 74, (uint)quality); //quality 0=SD, 1=HD
                 cmd301[78] = 20; //unknown2 
                 WriteUInt32LE(cmd301, 79, 1); //unknown23
             }
@@ -612,15 +615,29 @@ namespace V380Decoder.src
             var buf = new byte[max];
             int tot = 0;
             var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (DateTime.UtcNow < deadline && tot < max)
+            bool canTimeout = s.CanTimeout;
+            int oldTimeout = canTimeout ? s.ReadTimeout : -1;
+            try
             {
-                if (s.DataAvailable || tot > 0)
+                // Some firmwares answer stream login with far fewer bytes than `max`
+                // and send nothing more until StartStream, so a blocking read would deadlock.
+                if (canTimeout) s.ReadTimeout = 500;
+                while (DateTime.UtcNow < deadline && tot < max)
                 {
-                    int n = s.Read(buf, tot, max - tot);
-                    if (n <= 0) break;
-                    tot += n;
+                    if (s.DataAvailable || tot > 0)
+                    {
+                        int n;
+                        try { n = s.Read(buf, tot, max - tot); }
+                        catch (IOException) { break; } // idle: response is complete
+                        if (n <= 0) break;
+                        tot += n;
+                    }
+                    else Thread.Sleep(10);
                 }
-                else Thread.Sleep(10);
+            }
+            finally
+            {
+                if (canTimeout) s.ReadTimeout = oldTimeout;
             }
             if (tot == 0) return null;
             var r = new byte[tot];
@@ -753,6 +770,8 @@ namespace V380Decoder.src
         {
             return deviceId.ToString();
         }
+
+        public int GetQuality() => quality;
 
         public string GetDeviceVersion()
         {

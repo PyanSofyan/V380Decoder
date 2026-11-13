@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -168,6 +169,9 @@ namespace V380Decoder.src
                 api.MapPost("/api/image/auto", () => { client.ImageAuto(); LogUtils.debug("[API] Image Auto"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
                 api.MapPost("/api/image/flip", () => { client.ImageFlip(); LogUtils.debug("[API] Image Flip"); return Results.Ok(new StatusResponse { status = "ok", timestamp = DateTime.UtcNow }); });
 
+                api.MapPost("/api/quality/hd", () => PedirCalidadYReiniciar(1));
+                api.MapPost("/api/quality/sd", () => PedirCalidadYReiniciar(0));
+
                 api.MapGet("/api/status", () => Results.Ok(new StatusResponse
                 {
                     status = "running",
@@ -232,6 +236,27 @@ namespace V380Decoder.src
         {
             app?.StopAsync().Wait();
             app?.DisposeAsync().AsTask().Wait();
+        }
+
+        // Cambiar de resolucion a mitad de transmision hace caer el decodificador nativo
+        // de video (H264Sharp). Por eso no cambiamos la calidad "al vuelo": dejamos una
+        // senal en un archivo y cerramos limpio; el vigia de iniciar-camaras.ps1 relanza
+        // el programa ya con la calidad pedida.
+        private static IResult PedirCalidadYReiniciar(int quality)
+        {
+            try
+            {
+                var marcador = Path.Combine(AppContext.BaseDirectory, "calidad-pedida.txt");
+                File.WriteAllText(marcador, quality.ToString());
+                LogUtils.debug($"[API] Calidad pedida: {(quality == 1 ? "HD" : "SD")}, reiniciando...");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[API] No se pudo escribir el marcador de calidad: {ex.Message}");
+            }
+            // Responde 200 antes de cerrar, para que la tele no vea un error de red.
+            Task.Delay(400).ContinueWith(_ => Environment.Exit(0));
+            return Results.Ok(new StatusResponse { status = "reiniciando", timestamp = DateTime.UtcNow });
         }
     }
 }
