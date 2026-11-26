@@ -630,23 +630,34 @@ namespace V380Decoder.src
 
         int ReadExact(NetworkStream s, byte[] buf, int off, int cnt)
         {
+            // Blocking read with a socket timeout instead of polling DataAvailable + Thread.Sleep(10).
+            // Polling adds a 10-15 ms stall every time the socket buffer is momentarily empty; on a
+            // live stream that throttled reading to ~60 fragments/s and the camera dropped frames
+            // until the next keyframe (freezes of 10-25 s).
             int tot = 0;
-            var deadline = DateTime.Now.AddSeconds(15);
-            while (tot < cnt)
+            s.ReadTimeout = 15000; // same 15 s limit as before
+            try
             {
-                if (DateTime.Now > deadline)
+                while (tot < cnt)
                 {
-                    needReconnect = true;
-                    return tot;
+                    int n = s.Read(buf, off + tot, cnt - tot);
+                    if (n <= 0)
+                    {
+                        // Peer closed the connection: reconnect now instead of spinning until the timeout.
+                        needReconnect = true;
+                        break;
+                    }
+                    tot += n;
                 }
-                if (!s.DataAvailable)
-                {
-                    Thread.Sleep(10);
-                    continue;
-                }
-                int n = s.Read(buf, off + tot, cnt - tot);
-                if (n <= 0) break;
-                tot += n;
+            }
+            catch (IOException)
+            {
+                // ReadTimeout expired or the connection was reset.
+                needReconnect = true;
+            }
+            catch (ObjectDisposedException)
+            {
+                needReconnect = true;
             }
             return tot;
         }
