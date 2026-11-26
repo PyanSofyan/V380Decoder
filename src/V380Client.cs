@@ -23,6 +23,7 @@ namespace V380Decoder.src
         private byte[] aesKey = new byte[16];
         private bool needReconnect = false;
         private DeviceInfo deviceInfo;
+        private int sessionVideoFrames; // valid video frames received in the current stream session
 
 
         public V380Client(string ip, int port, uint deviceId, string username, string password, SourceStream source, OutputMode mode, bool enableMjpeg)
@@ -42,28 +43,34 @@ namespace V380Decoder.src
         public void Run(RtspServer rtsp, CancellationToken ct)
         {
             SetDeviceInfo();
+            int failStreak = 0; // consecutive attempts that did not produce video
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
                     int auth = GetAuthTicket();
-                    if (auth == 0) continue;
+                    if (auth == 0) { Backoff(++failStreak, ct); continue; }
                     if (auth == -1) break;
 
                     if (!StreamLogin())
                     {
                         Console.Error.WriteLine("[STREAM] Retrying...");
                         streamStream?.Close(); streamClient?.Close();
+                        Backoff(++failStreak, ct);
                         continue;
                     }
 
                     if (!StartStream())
                     {
                         Console.Error.WriteLine("[STREAM] Retrying...");
+                        Backoff(++failStreak, ct);
                         continue;
                     }
 
+                    // Returns when the stream is lost; the loop then requests a fresh auth ticket.
                     ReceiveFrames(mode, rtsp, ct);
+                    failStreak = sessionVideoFrames >= 100 ? 0 : failStreak + 1;
+                    Backoff(failStreak, ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -82,6 +89,15 @@ namespace V380Decoder.src
                     streamStream?.Close(); streamClient?.Close();
                 }
             }
+        }
+
+        // Wait between attempts: 1 s after a session that produced video (n = 0), then 2, 4, 8, 16 and
+        // at most 30 s while attempts keep failing, so a failing camera or server is not hammered.
+        private static void Backoff(int n, CancellationToken ct)
+        {
+            int ms = n <= 0 ? 1000 : Math.Min(30000, 1000 << Math.Min(n, 5));
+            if (n > 1) Console.Error.WriteLine($"[STREAM] waiting {ms / 1000}s before retrying ({n} attempts without video)");
+            ct.WaitHandle.WaitOne(ms);
         }
 
         public int GetAuthTicket()
@@ -151,6 +167,13 @@ namespace V380Decoder.src
                         Console.Error.WriteLine($"[AUTH] invalid password. exiting...");
                     else if (loginResult == 1018)
                         Console.Error.WriteLine($"[AUTH] invalid device id. exiting...");
+                    else if (loginResult == 1002)
+                    {
+                        // Seen right after restarting a client while its previous session was still
+                        // alive on the server; the next attempt succeeds, so retry instead of exiting.
+                        Console.Error.WriteLine($"[AUTH] login rejected with result 1002. retrying...");
+                        return 0;
+                    }
                     else
                         Console.Error.WriteLine($"[AUTH] login failed result: {loginResult} (expected 1001). exiting...");
 
@@ -326,6 +349,8 @@ namespace V380Decoder.src
                 ? Console.OpenStandardOutput()
                 : null;
 
+            needReconnect = false;
+            sessionVideoFrames = 0;
             Console.Error.WriteLine($"[RECV] mode={mode} decrypt={needDecrypt} communicationVersion={communicationVersion}");
 
             try
@@ -334,11 +359,14 @@ namespace V380Decoder.src
                 {
                     if (needReconnect)
                     {
-                        Console.Error.WriteLine($"[STREAM] lost, reconnecting... ");
+                        // Do not repeat StreamLogin/StartStream with the old auth ticket: the media key is
+                        // derived from it (GenerateMediaKey(authTicket)), and once the server has dropped
+                        // that ticket the video decrypts to garbage ("bad start code" on every frame) or the
+                        // server closes the stream immediately in a tight loop. Return to Run, which
+                        // requests a new ticket and key.
+                        Console.Error.WriteLine($"[STREAM] lost, reconnecting with a new auth ticket...");
                         try { streamStream?.Close(); streamClient?.Close(); } catch { }
-                        if (!StreamLogin()) break;
-                        if (!StartStream()) break;
-                        needReconnect = false;
+                        break;
                     }
 
                     // 12-byte fragment header
@@ -417,6 +445,7 @@ namespace V380Decoder.src
                             Console.Error.WriteLine($"[VIDEO] bad start code, len={payload.Length}");
                             continue;
                         }
+                        sessionVideoFrames++;
 
                         if (scPos > 0)
                         {
